@@ -9,6 +9,7 @@ from proto import utc_bot as pb
 import betterproto
 import asyncio
 import re
+import orjson
 
 DAYS_IN_MONTH = 21
 DAYS_IN_YEAR = 252
