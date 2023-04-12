@@ -31,7 +31,11 @@ WEATHER_LAG_CORRELATIONS = [0.8273928658695076,
                             0.9180806552651403,
                             0.917776546901705,
                             0.9138785469586278]
-conf95 = 1.96 * np.sqrt(9.113656672214566e-05)
+SBL_MEAN = -6.046839389007168e-05
+SBL_VAR = 9.113656672214566e-05
+
+
+PARAM_FILE = "./params/case1_params.json"
 
 class Case1Bot(UTCBot):
     etf_suffix = ''
@@ -133,6 +137,7 @@ class Case1Bot(UTCBot):
         ### TODO START ASYNC FUNCTIONS HERE
         ###
         asyncio.create_task(self.example_redeem_etf())
+        asyncio.create_task(self.handle_read_params())
         
         # Starts market making for each asset
         # for asset in CONTRACTS:
@@ -151,12 +156,18 @@ class Case1Bot(UTCBot):
         pass
     
     async def calculate_asset_price(self):
-        return 5
+        corr = np.mean(WEATHER_LAG_CORRELATIONS[min(len(self._weather_log) - 1, 8)])
+        ind = np.mean(self._weather_log[min(len(self._weather_log) - 1, 8)])
+        pred = price_0 * np.exp((SBL_MEAN - SBL_VAR / 2) \
+                    + np.sqrt(SBL_VAR) * (corr * ind \
+                    + np.sqrt(1 - corr ** 2) * np.random.normal(0, 1)))
+        conf = 1.96 * pred * np.sqrt(SBL_VAR) * ((1 - corr ** 2) + corr * ind)
+        return pred, conf
 
     async def calculate_future_price(self, asset: str):
         underlying_asset_price = await calculate_asset_price(asset)
         return await  underlying_asset_price * (1 + INTEREST_RATE * days_to_expiry())
-        
+ 
     async def make_market_asset(self, asset: str):
         while self._day <= DAYS_IN_YEAR:
             ## Old prices
@@ -193,28 +204,17 @@ class Case1Bot(UTCBot):
 
                 self.__orders[f"underlying_{d}_{asset}"] = (r.order_id, order_px)
 
+    async def handle_read_params(self):
+        while True:
+            try:
+                self.params = orjson.loads(open(PARAM_FILE, "r").read())
+            except:
+                print("Unable to read file " + PARAM_FILE)
+
+            await asyncio.sleep(1)
+
 def round_nearest(x, a):
     return round(round(x / a) * a, -int(math.floor(math.log10(a))))             
-
-def gbm_corr_expected_price(exog, corrs, n_lags=10, price_0=0, mean=-6.046839389007168e-05, var=9.113656672214566e-05):
-    """
-    Returns the expected price and +/- confidence interval for time series that follows GBM.
-    """
-    corr = np.mean(corrs[min(len(exog) - 1, n_lags)])
-    ind = np.mean(exog[min(len(exog) - 1, n_lags)])
-    pred = price_0 * np.exp((mean - var / 2) \
-                + np.sqrt(var) * (corr * ind \
-                + np.sqrt(1 - corr ** 2) * np.random.normal(0, 1)))
-    return pred
-
-# def test_gbm_corr_model(data, exog, corrs, n_lags):
-#     preds = []
-
-#     for i in range(1, len(data) - 1):
-#         pred = gbm_corr_expected_price(exog[:i+1], corrs, n_lags, data[i], -6.046839389007168e-05, 9.113656672214566e-05)
-#         preds.append(pred)
-    
-#     return preds
 
 if __name__ == "__main__":
     start_bot(Case1Bot)
