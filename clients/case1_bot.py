@@ -39,6 +39,9 @@ PARAM_FILE = "./params/case1_params.json"
 
 class Case1Bot(UTCBot):
     etf_suffix = ''
+
+    soy_prices = np.zeros(DAYS_IN_YEAR)
+
     async def create_etf(self, qty: int):
         '''
         Creates qty amount the ETF basket
@@ -63,7 +66,7 @@ class Case1Bot(UTCBot):
         '''
         future = ord(asset[-1]) - ord('A')
         expiry = 21 * (future + 1)
-        return self._day - expiry
+        return expiry - self._day
 
     async def handle_exchange_update(self, update: pb.FeedMessage):
         '''
@@ -98,7 +101,7 @@ class Case1Bot(UTCBot):
             for asset in CONTRACTS:
                 book = update.market_snapshot_msg.books[asset]
                 self._best_bid[asset] = float(book.bids[0].px)
-                self._best_ask[asset] = float(book.bids[0].px)
+                self._best_ask[asset] = float(book.asks[0].px)
 
     async def handle_round_started(self):
         ### Current day
@@ -136,12 +139,12 @@ class Case1Bot(UTCBot):
         ###
         ### TODO START ASYNC FUNCTIONS HERE
         ###
-        asyncio.create_task(self.example_redeem_etf())
+        # asyncio.create_task(self.example_redeem_etf())
         asyncio.create_task(self.handle_read_params())
         
         # Starts market making for each asset
-        # for asset in CONTRACTS:
-            # asyncio.create_task(self.make_market_asset(asset))
+        for asset in CONTRACTS:
+            asyncio.create_task(self.make_market_asset(asset))
 
     # This is an example of creating and redeeming etfs
     # You can remove this in your actual bots.
@@ -156,17 +159,23 @@ class Case1Bot(UTCBot):
         pass
     
     async def calculate_asset_price(self):
-        corr = np.mean(WEATHER_LAG_CORRELATIONS[min(len(self._weather_log) - 1, 8)])
-        ind = np.mean(self._weather_log[min(len(self._weather_log) - 1, 8)])
-        pred = price_0 * np.exp((SBL_MEAN - SBL_VAR / 2) \
-                    + np.sqrt(SBL_VAR) * (corr * ind \
-                    + np.sqrt(1 - corr ** 2) * np.random.normal(0, 1)))
-        conf = 1.96 * pred * np.sqrt(SBL_VAR) * ((1 - corr ** 2) + corr * ind)
+        if self._day == 0:
+            pred = self._best_ask['SBL'] + self._best_bid['SBL']
+            conf = -1
+        else:
+            corr = np.mean(WEATHER_LAG_CORRELATIONS[min(len(self._weather_log) - 1, 8)])
+            ind = np.mean(self._weather_log[min(len(self._weather_log) - 1, 8)])
+            pred = self.soy_prices[self._day - 1] * np.exp((SBL_MEAN - SBL_VAR / 2) \
+                        + np.sqrt(SBL_VAR) * (corr * ind \
+                        + np.sqrt(1 - corr ** 2) * np.random.normal(0, 1)))
+            # 1.96 = +/-1.96 std deviations, which represents 95% confidence
+            conf = 1.96 * pred * np.sqrt(SBL_VAR) * ((1 - corr ** 2) + corr * ind)
         return pred, conf
 
     async def calculate_future_price(self, asset: str):
-        underlying_asset_price = await calculate_asset_price(asset)
-        return await  underlying_asset_price * (1 + INTEREST_RATE * days_to_expiry())
+        underlying_asset_price = await self.calculate_asset_price()
+        days = await self.days_to_expiry(asset)
+        return underlying_asset_price * (1 + INTEREST_RATE * days / DAYS_IN_YEAR)
  
     async def make_market_asset(self, asset: str):
         while self._day <= DAYS_IN_YEAR:
