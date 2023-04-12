@@ -32,26 +32,6 @@ WEATHER_LAG_CORRELATIONS = [0.8273928658695076,
                             0.9138785469586278]
 conf95 = 1.96 * np.sqrt(9.113656672214566e-05)
 
-def gbm_corr_expected_price(exog, corrs, n_lags=10, price_0=0, mean=-6.046839389007168e-05, var=9.113656672214566e-05):
-    """
-    Returns the expected price and +/- confidence interval for time series that follows GBM.
-    """
-    corr = np.mean(corrs[min(len(exog) - 1, n_lags)])
-    ind = np.mean(exog[min(len(exog) - 1, n_lags)])
-    pred = price_0 * np.exp((mean - var / 2) \
-                + np.sqrt(var) * (corr * ind \
-                + np.sqrt(1 - corr ** 2) * np.random.normal(0, 1)))
-    return pred
-
-# def test_gbm_corr_model(data, exog, corrs, n_lags):
-#     preds = []
-
-#     for i in range(1, len(data) - 1):
-#         pred = gbm_corr_expected_price(exog[:i+1], corrs, n_lags, data[i], -6.046839389007168e-05, 9.113656672214566e-05)
-#         preds.append(pred)
-    
-#     return preds
-
 class Case1Bot(UTCBot):
     etf_suffix = ''
     async def create_etf(self, qty: int):
@@ -72,7 +52,7 @@ class Case1Bot(UTCBot):
             return pb.SwapResponse(False, "Unsure of swap")
         return await self.swap("redeem_etf_" + self.etf_suffix, qty) 
     
-    async def days_to_expiry(self, asset):
+    async def days_to_expiry(self, asset: str):
         '''
         Calculates days to expiry for the future
         '''
@@ -165,16 +145,16 @@ class Case1Bot(UTCBot):
             create_resp = await self.create_etf(5)
             await asyncio.sleep(1)
 
-
     ### Helpful ideas
     async def calculate_risk_exposure(self):
         pass
     
-    async def calculate_fair_price(self, asset):
-        pass
+    async def calculate_asset_price(self):
+        return 5
 
-    async def calculate_future_price(self):
-        return calculate_fair_price() * (1 + INTEREST_RATE * days_to_expiry())
+    async def calculate_future_price(self, asset: str):
+        underlying_asset_price = await calculate_asset_price(asset)
+        return await  underlying_asset_price * (1 + INTEREST_RATE * days_to_expiry())
         
     async def make_market_asset(self, asset: str):
         while self._day <= DAYS_IN_YEAR:
@@ -214,6 +194,26 @@ class Case1Bot(UTCBot):
 
 def round_nearest(x, a):
     return round(round(x / a) * a, -int(math.floor(math.log10(a))))             
+
+def gbm_corr_expected_price(exog, corrs, n_lags=10, price_0=0, mean=-6.046839389007168e-05, var=9.113656672214566e-05):
+    """
+    Returns the expected price and +/- confidence interval for time series that follows GBM.
+    """
+    corr = np.mean(corrs[min(len(exog) - 1, n_lags)])
+    ind = np.mean(exog[min(len(exog) - 1, n_lags)])
+    pred = price_0 * np.exp((mean - var / 2) \
+                + np.sqrt(var) * (corr * ind \
+                + np.sqrt(1 - corr ** 2) * np.random.normal(0, 1)))
+    return pred
+
+# def test_gbm_corr_model(data, exog, corrs, n_lags):
+#     preds = []
+
+#     for i in range(1, len(data) - 1):
+#         pred = gbm_corr_expected_price(exog[:i+1], corrs, n_lags, data[i], -6.046839389007168e-05, 9.113656672214566e-05)
+#         preds.append(pred)
+    
+#     return preds
 
 if __name__ == "__main__":
     start_bot(Case1Bot)
