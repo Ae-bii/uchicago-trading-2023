@@ -18,6 +18,39 @@ TICK_SIZE = 0.01
 FUTURE_CODES = [chr(ord('A') + i) for i in range(NUM_FUTURES)] # Suffix of monthly future code
 CONTRACTS = ['SBL'] +  ['LBS' + c for c in FUTURE_CODES] + ['LLL']
 
+WEATHER_LAG_CORRELATIONS = [0.8273928658695076,
+                            0.8490646085184801,
+                            0.8660726823774236,
+                            0.8819633686272389,
+                            0.8938345173210757,
+                            0.9028685720889777,
+                            0.9114565561827758,
+                            0.9161042572964535,
+                            0.9194070826557654,
+                            0.9180806552651403,
+                            0.917776546901705,
+                            0.9138785469586278]
+conf95 = 1.96 * np.sqrt(9.113656672214566e-05)
+
+def gbm_corr_expected_price(exog, corrs, n_lags=10, price_0=0, mean=-6.046839389007168e-05, var=9.113656672214566e-05):
+    """
+    Returns the expected price and +/- confidence interval for time series that follows GBM.
+    """
+    corr = np.mean(corrs[min(len(exog) - 1, n_lags)])
+    ind = np.mean(exog[min(len(exog) - 1, n_lags)])
+    pred = price_0 * np.exp((mean - var / 2) \
+                + np.sqrt(var) * (corr * ind \
+                + np.sqrt(1 - corr ** 2) * np.random.normal(0, 1)))
+    return pred
+
+# def test_gbm_corr_model(data, exog, corrs, n_lags):
+#     preds = []
+
+#     for i in range(1, len(data) - 1):
+#         pred = gbm_corr_expected_price(exog[:i+1], corrs, n_lags, data[i], -6.046839389007168e-05, 9.113656672214566e-05)
+#         preds.append(pred)
+    
+#     return preds
 
 class Case1Bot(UTCBot):
     etf_suffix = ''
@@ -81,8 +114,6 @@ class Case1Bot(UTCBot):
                 book = update.market_snapshot_msg.books[asset]
                 self._best_bid[asset] = float(book.bids[0].px)
                 self._best_ask[asset] = float(book.bids[0].px)
-            
-
 
     async def handle_round_started(self):
         ### Current day
@@ -141,6 +172,9 @@ class Case1Bot(UTCBot):
     
     async def calculate_fair_price(self, asset):
         pass
+
+    async def calculate_future_price(self):
+        return calculate_fair_price() * (1 + INTEREST_RATE * days_to_expiry())
         
     async def make_market_asset(self, asset: str):
         while self._day <= DAYS_IN_YEAR:
