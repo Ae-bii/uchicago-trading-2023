@@ -6,13 +6,16 @@ import betterproto
 import asyncio
 import orjson
 import numpy as np
+import math
 from math import *
 import pandas as pd
 from matplotlib import pyplot as plt
 from scipy.optimize import fsolve
 from scipy.stats import norm
 
-PARAM_FILE = "./params/case2_params.json"
+TICK_SIZE = 0.01
+
+PARAM_FILE = "./params/case2_params.jsson"
 
 
 
@@ -156,10 +159,10 @@ class OptionBot(UTCBot):
         # to zero for every asset.
         self.positions = {}
 
-        self.positions["UC"] = 0
+        self.positions["SPY"] = 0
         for strike in self.option_strikes:
             for flag in ["C", "P"]:
-                self.positions[f"UC{strike}{flag}"] = 0
+                self.positions[f"SPY{strike}{flag}"] = 0
 
         # Stores the current day (starting from 0 and ending at 5). This is a floating point number,
         # meaning that it includes information about partial days
@@ -191,7 +194,7 @@ class OptionBot(UTCBot):
         self.max_contracts_left = 0
         await asyncio.sleep(0.1)
         asyncio.create_task(self.handle_read_params())
-    
+        
     def add_trades(self):
         requests = []
         day = np.floor(self.current_day)
@@ -204,7 +207,7 @@ class OptionBot(UTCBot):
                 # label = f"covid_{i}"
                 requests.append(
                     self.modify_order(
-                        label,
+                        # label,
                         "SPY100P",
                         pb.OrderSpecType.LIMIT,
                         pb.OrderSpecSide.BID,
@@ -233,7 +236,7 @@ class OptionBot(UTCBot):
         thresh_val = .25/2000
         for strike in self.option_strikes:
             for flag in ["C", "P"]:
-                asset_name = f"UC{strike}{flag}"
+                asset_name = f"SPY{strike}{flag}"
                 theo = self.compute_options_price(
                     flag, self.underlying_price, strike, time_to_expiry, vol
                 )
@@ -295,9 +298,33 @@ class OptionBot(UTCBot):
     async def handle_exchange_update(self, update: pb.FeedMessage):
         kind, _ = betterproto.which_one_of(update, "msg")
         # Competition event messages
-        if kind == "generic_msg":
-            msg = update.generic_msg.message
-            print(msg)
+        if kind == "pnl_msg":
+            # When you hear from the exchange about your PnL, print it out
+            print("My PnL:", update.pnl_msg.m2m_pnl)
+            print(f"Positions: {self.positions}")
+            # index = self.time_tick
+            # self.pnls[index] = float(update.pnl_msg.m2m_pnl)
+            # for _ in range(3):
+            #     if index != 999:
+            #         index += 1
+            #         self.pnls[index] = float(update.pnl_msg.m2m_pnl)
+        elif kind == "market_snapshop_msg":
+            self.books["SPY"] = update.market_snapshot_msg.books["SPY"]
+            for strike in self.option_strikes:
+                self.books[f"SPY{strike}C"] = update.market_snapshot_msg.books[f"SPY{strike}C"]
+                self.books[f"SPY{strike}P"] = update.market_snapshot_msg.books[f"SPY{strike}P"]
+                
+            book = update.market_snapshot_msg.books["SPY"]
+            
+            if (len(book.bids) > 0):
+                self.underlying_price = (
+                    float(book.bids[0].px) + float(book.asks[0].px)
+                ) / 2
+            if (self.current_day < 599):
+                await self.update_options_quotes()
+            self.update_greek_limits()
+            print(self.positions)
+                
 
     async def handle_read_params(self):
         while True:
@@ -308,6 +335,8 @@ class OptionBot(UTCBot):
 
             await asyncio.sleep(1)
 
+def round_nearest(x, a):
+    return round(round(x / a) * a, -int(math.floor(math.log10(a))))
 
 if __name__ == "__main__":
     start_bot(OptionBot)
