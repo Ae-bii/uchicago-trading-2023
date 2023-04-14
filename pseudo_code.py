@@ -51,6 +51,8 @@ if risk_threshold hit for gamma, theta, vega (i.e. 0.8*greek_limit)
     (i.e. if penny-in price for selling options is 0.1 and we are too long, increase penny-in-price to 0.2 or higher until below threshold)
 if risk_threshold hit for delta
     buy/sell underlying stock
+    if delta is above delta risk threhold by 30, find the best bid/ask, buy it all up, and repeat until you are longing/shorting 30 stock
+    (delta for stocks are 1)
 
 
 for each asset
