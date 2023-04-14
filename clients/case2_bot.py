@@ -17,7 +17,7 @@ from scipy.optimize import fsolve
 from scipy.stats import norm
 from typing import Dict, DefaultDict, Tuple
 
-TICK_SIZE = 0.01
+TICK_SIZE = 0.1
 TICKERS_CALL = ["SPY" + str(strike) + "C" for strike in range(65,140,5)]
 TICKERS_PUT = ["SPY" + str(strike) + "P" for strike in range(65,140,5)]
 TICKERS = TICKERS_CALL + TICKERS_PUT
@@ -85,7 +85,6 @@ class OptionBot(UTCBot):
         return 100 * S * norm.pdf(self.d1(S,K,T,0,sigma)) * sigma/(2 * np.sqrt(T))
     
     def update_greek_limits(self):
-        time = 1/4 - ((1/4 - 1/12) * (self.time_tick/600))
         for strike in self.option_strikes:
                         
             mid_call = (self._best_bid[f"SPY{strike}C"] + self._best_ask[f"SPY{strike}C"]) / 2
@@ -93,25 +92,25 @@ class OptionBot(UTCBot):
             # if mid_call == 0.0 or mid_put == 0.0:
             #     print(mid_call)
             #     print(mid_put)
-            iv_call = vectorized_implied_volatility(mid_call, self.underlying_price[-1], strike, time, 0, 'c', q=0, return_as='numpy')[0]
-            iv_put = vectorized_implied_volatility(mid_put, self.underlying_price[-1], strike, time, 0, 'p', q=0, return_as='numpy')[0]
+            iv_call = vectorized_implied_volatility(mid_call, self.underlying_price[-1], strike, self.time_to_expiry, 0, 'c', q=0, return_as='numpy')[0]
+            iv_put = vectorized_implied_volatility(mid_put, self.underlying_price[-1], strike, self.time_to_expiry, 0, 'p', q=0, return_as='numpy')[0]
 
             
-            if not math.isnan(iv_call) and not math.isnan(iv_put):
-                call_option_price = self.compute_options_price('C', self.underlying_price[-1], strike, time, iv_call)
-                put_option_price = self.compute_options_price('P', self.underlying_price[-1], strike, time, iv_put)
+            if not (math.isnan(iv_call) or math.isnan(iv_put)):
+                call_option_price = self.compute_options_price('C', self.underlying_price[-1], strike, self.time_to_expiry, iv_call)
+                put_option_price = self.compute_options_price('P', self.underlying_price[-1], strike, self.time_to_expiry, iv_put)
                 
                 # Multiply each of the calulations by our current position of each individual option
-                call_position = self.positions[f"SPY{strike}C"]
-                put_position = self.positions[f"SPY{strike}P"]
+                call_position = self.positions.get(f"SPY{strike}C", 0)
+                put_position = self.positions.get(f"SPY{strike}P", 0)
                 
-                self.my_greek_limits["delta"] += call_position*self.delta_call(self.underlying_price[-1], strike, time, call_option_price) + put_position*self.delta_put(self.underlying_price[-1], strike, time, put_option_price)
+                self.my_greek_limits["delta"] += call_position*self.delta_call(self.underlying_price[-1], strike, self.time_to_expiry, call_option_price) + put_position*self.delta_put(self.underlying_price[-1], strike, self.time_to_expiry, put_option_price)
                 
-                self.my_greek_limits["gamma"] += call_position*self.gamma_call(self.underlying_price[-1], strike, time, call_option_price) + put_position*self.gamma_put(self.underlying_price[-1], strike, time, put_option_price)
+                self.my_greek_limits["gamma"] += call_position*self.gamma_call(self.underlying_price[-1], strike, self.time_to_expiry, call_option_price) + put_position*self.gamma_put(self.underlying_price[-1], strike, self.time_to_expiry, put_option_price)
                 
-                self.my_greek_limits["theta"] += call_position*self.theta_call(self.underlying_price[-1], strike, time, call_option_price) + put_position*self.theta_put(self.underlying_price[-1], strike, time, put_option_price)
+                self.my_greek_limits["theta"] += call_position*self.theta_call(self.underlying_price[-1], strike, self.time_to_expiry, call_option_price) + put_position*self.theta_put(self.underlying_price[-1], strike, self.time_to_expiry, put_option_price)
                 
-                self.my_greek_limits["vega"] += call_position*self.theta_call(self.underlying_price[-1], strike, time, call_option_price) + put_position*self.theta_put(self.underlying_price[-1], strike, time, put_option_price)
+                self.my_greek_limits["vega"] += call_position*self.theta_call(self.underlying_price[-1], strike, self.time_to_expiry, call_option_price) + put_position*self.theta_put(self.underlying_price[-1], strike, self.time_to_expiry, put_option_price)
     
     # Cumulative standard normal distribution
     def cdf(self,x):
@@ -203,9 +202,10 @@ class OptionBot(UTCBot):
         self._best_ask: Dict[str, float] = defaultdict(lambda: 0)
         self.__orders: DefaultDict[str, Tuple[str, float]] = defaultdict(lambda: ("", 0))
 
-        
         self.underlying_price = [100]
         self.time_tick = 0
+        self.time_to_expiry = 1/4 - ((1/4 - 1/12) * (self.time_tick/600))
+
         self.pnls = [0.0] * 1000
         self.price_path = []
         self.vols = []
@@ -224,32 +224,56 @@ class OptionBot(UTCBot):
         self.books={}
         self.safe_buy = 0
         self.max_contracts_left = 0
+        
         await asyncio.sleep(0.1)
         asyncio.create_task(self.handle_read_params())
+        asyncio.create_task(self.add_trades())
         
     async def add_trades(self):
-        requests = []
-        count = 0
-        time_to_expiry = 1/4 - ((1/4 - 1/12) * (self.time_tick/600))
-        
-        
-        for strike in self.option_strikes:
-            for flag in ["C", "P"]:
-                theo = self.compute_options_price(flag, self.underlying_price, strike, time_to_expiry, self.compute_vol_estimate())
-                asset = f"SPY{strike}{flag}"
-                
-                best_bid = self.books[asset].bids[0].px
-                best_ask = self.books[asset].asks[0].px
-                
-                # Temp penny values
-                penny_bid_price = best_bid + 0.01
-                penny_ask_price = best_ask - 0.01
-                
-                if penny_ask_price >= theo:
-                    a = self.modify_order(f"PENNY_ASK{asset}", asset, pb.OrderSpecType.LIMIT, pb.OrderSpecSide.ASK, 100, round_nearest(penny_ask_price, TICK_SIZE))
-                
-                if penny_bid_price <= theo:
-                    b = self.modify_order(f"PENNY_BID{asset}", asset, pb.OrderSpecType.LIMIT, pb.OrderSpecSide.BID, 100, round_nearest(penny_bid_price, TICK_SIZE))
+        while self.time_tick <= 600:
+            if self.my_greek_limits["delta"] >= 0.8 * self.greek_limits["delta"]:
+                order_quantity = self.my_greek_limits["delta"] - 0.8*self.greek_limits["delta"]
+                stock_resp = await self.modify_order("SPY", "SPY", pb.OrderSpecType.MARKET, pb.OrderSpecSide.ASK, 100)
+            elif self.my_greek_limits["delta"] > 0.8 * -self.greek_limits["delta"]:
+                order_quantity =  0.8*self.greek_limits["delta"] - self.my_greek_limits["delta"]
+                stock_resp = await self.modify_order("SPY", "SPY", pb.OrderSpecType.MARKET, pb.OrderSpecSide.BID, 100)
+            
+            for strike in self.option_strikes:
+                for flag in ["C", "P"]:
+                    best_bid = self._best_bid[f"SPY{strike}{flag}"]
+                    best_ask = self._best_ask[f"SPY{strike}{flag}"]
+                    
+                    mid_price = (best_bid + best_ask) / 2
+                    
+                    impl_vol = vectorized_implied_volatility(mid_price, self.underlying_price[-1], strike, self.time_to_expiry, 0, flag.lower(), q=0, return_as='numpy')[0]
+                    
+                    if not math.isnan(impl_vol) and impl_vol != 0:
+                        theo = self.compute_options_price(flag, self.underlying_price[-1], strike, self.time_to_expiry, impl_vol)
+                        asset = f"SPY{strike}{flag}"
+                        
+                        # Temp penny values
+                        penny_bid_price = best_bid + 0.01
+                        penny_ask_price = best_ask - 0.01
+                        
+                        # print(f"Theoretical {asset}: {theo}")
+                        # print(f"Penny Bid {asset}: {penny_bid_price}")
+                        # print(f"Penny Ask {asset}: {penny_ask_price}")
+                        
+                        old_bid_id, _ = self.__orders[asset + '_bid']
+                        old_ask_id, _ = self.__orders[asset + '_ask']
+                        if penny_ask_price >= theo:
+                            ask_resp = await self.modify_order(f"PENNY_ASK{asset}", asset, pb.OrderSpecType.LIMIT, pb.OrderSpecSide.ASK, 15, round_nearest(penny_ask_price, TICK_SIZE))
+                            
+                            if ask_resp.ok:
+                                self.__orders[asset + '_ask'] = (str(penny_bid_price), ask_resp.order_id)
+                        
+                        if penny_bid_price <= theo:
+                            bid_resp = await self.modify_order(f"PENNY_BID{asset}", asset, pb.OrderSpecType.LIMIT, pb.OrderSpecSide.BID, 15, round_nearest(penny_bid_price, TICK_SIZE))
+                            
+                            if bid_resp.ok:
+                                self.__orders[asset + '_bid'] = (str(penny_bid_price), bid_resp.order_id)
+                                
+            await asyncio.sleep(1)
                 
 
     
@@ -358,7 +382,7 @@ class OptionBot(UTCBot):
                     float(book.bids[0].px) + float(book.asks[0].px)
                 ) / 2)
                 self.update_greek_limits()
-            print(self.my_greek_limits)
+                print(self.my_greek_limits)
                 
             # if (self.time_tick < 599):
             #     await self.update_options_quotes()
@@ -368,6 +392,9 @@ class OptionBot(UTCBot):
             kind == "generic_msg"
             and update.generic_msg.event_type == pb.GenericMessageType.MESSAGE
         ):
+            resp = await self.get_positions()
+            if resp.ok:
+                self.positions = resp.positions
             # The platform will regularly send out what day it currently is (starting from day 0 at
             # the start of the case) 
             # print(f"Positions: {self.positions}")
@@ -375,9 +402,9 @@ class OptionBot(UTCBot):
             # print(f"New Price: {self.underlying_price}")
             
             # print("Underlying ", self.underlying_price)
-            if (self.time_tick == 599):
-                # self.market_closed()
-                pass
+            # if (self.time_tick == 599):
+            #     # self.market_closed()
+            #     pass
                 
 
     async def handle_read_params(self):
