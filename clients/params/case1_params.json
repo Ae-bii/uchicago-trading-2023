@@ -1,2 +1,21 @@
 {
+    "max_pos": 950,
+    "SBL": {
+        "edge": 0.03,
+        "fade": 0.02,
+        "size": 100,
+        "slack": 0.10
+    },
+    "FUT": {
+        "edge": 0.05,
+        "fade": 0.02,
+        "size": 100,
+        "slack": 0.10
+    },
+    "LLL": {
+        "edge": 0.05,
+        "fade": 0.02,
+        "size": 100,
+        "slack": 0.10
+    }
 }
