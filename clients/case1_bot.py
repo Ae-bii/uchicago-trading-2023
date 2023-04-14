@@ -112,7 +112,7 @@ class Case1Bot(UTCBot):
                 self._best_bid[asset] = float(best_bid.px) if best_bid is not None else 0
                 self._best_ask[asset] = float(best_ask.px) if best_ask is not None else 0
             
-            self.soy_prices[self._day] = (self._best_bid['SBL'] + self._best_ask['SBL']) / 2
+            # self.soy_prices[self._day] = (self._best_bid['SBL'] + self._best_ask['SBL']) / 2
 
         elif kind == "pnl_msg":
             print('Realized pnl:', update.pnl_msg.realized_pnl, "| M2M pnl:", update.pnl_msg.m2m_pnl)
@@ -209,15 +209,10 @@ class Case1Bot(UTCBot):
  
     async def make_market_asset(self, asset: str):
         while self._day <= DAYS_IN_YEAR:
-            if asset != 'SBL' and asset != 'LLL' and self._day >= 22 * (ord('A') - ord(asset[-1]) + 1):
-                print(self._day, asset)
-                # skip futures that have already expired!
-                return
-
-            await self.calculate_asset_price(asset)
+            # await self.calculate_asset_price(asset)
 
             penny_ask_price = self._best_ask[asset] - 0.01 - self._fade[asset] * self.positions.get(asset, 0) / 100
-            penny_bid_price = self._best_bid[asset] + 0.01 + self._fade[asset] * self.positions.get(asset, 0) / 100
+            penny_bid_price = self._best_bid[asset] + 0.01 - self._fade[asset] * self.positions.get(asset, 0) / 100
 
             if penny_ask_price - penny_bid_price > 0:
                 old_bid_id, _ = self.__orders[asset + '_bid']
@@ -283,7 +278,7 @@ class Case1Bot(UTCBot):
                             # self.__order_id_map[bid_resp.order_id] = asset + '_ask' + lv
 
 
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(1)
 
     async def send_bogus_orders(self):
         for asset in CONTRACTS:
@@ -328,7 +323,7 @@ class Case1Bot(UTCBot):
     async def print_positions(self):
         while True:
             print("\nDay", self._day)
-            print("Positions:", self.positions)
+            print(self.positions)
             await asyncio.sleep(1)
 
 def round_nearest(x, a):
