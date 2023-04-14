@@ -1,21 +1,27 @@
 #!/usr/bin/env python
 
+from collections import defaultdict
+from operator import attrgetter
 from utc_bot import UTCBot, start_bot
 import proto.utc_bot as pb
 import betterproto
 import asyncio
-import orjson
+import json
 import numpy as np
 import math
 from math import *
 import pandas as pd
+from py_vollib_vectorized.implied_volatility import vectorized_implied_volatility
 from matplotlib import pyplot as plt
 from scipy.optimize import fsolve
 from scipy.stats import norm
+from typing import Dict, DefaultDict, Tuple
 
 TICK_SIZE = 0.01
-
-PARAM_FILE = "./params/case2_params.jsson"
+TICKERS_CALL = ["SPY" + str(strike) + "C" for strike in range(65,140,5)]
+TICKERS_PUT = ["SPY" + str(strike) + "P" for strike in range(65,140,5)]
+TICKERS = TICKERS_CALL + TICKERS_PUT
+PARAM_FILE = "clients/params/case2_params.json"
 
 
 
@@ -23,8 +29,6 @@ class OptionBot(UTCBot):
     """
     An example bot that reads from a file to set internal parameters during the round
     """
-    def __init__(self):
-        self.option_strikes = range(65,140,5)
     
     
     """
@@ -37,7 +41,7 @@ class OptionBot(UTCBot):
         return self.d1(S,K,T,r,sigma)-sigma*np.sqrt(T)
 
     def bs_call(self,S,K,T,r,sigma):
-        return S*norm.cdf(self.d1(S,K,T,r,sigma))-K*np.exp(-r*T)*norm.cdf(d2(S,K,T,r,sigma))
+        return S*norm.cdf(self.d1(S,K,T,r,sigma))-K*np.exp(-r*T)*norm.cdf(self.d2(S,K,T,r,sigma))
     def bs_put(self,S,K,T,r,sigma):
         return K*np.exp(-r*T)-S+self.bs_call(S,K,T,r,sigma)
 
@@ -64,21 +68,51 @@ class OptionBot(UTCBot):
         sigma = self.iv_call(S,K,T,0,C)
         return 100 * S * norm.pdf(self.d1(S,K,T,0,sigma)) * sigma/(2 * np.sqrt(T))
 
-    def delta_put(self,S,K,T,C):
-        sigma = self.iv_put(S,K,T,0,C)
+    def delta_put(self,S,K,T,P):
+        sigma = self.iv_put(S,K,T,0,P)
         return 100 * (norm.cdf(self.d1(S,K,T,0,sigma)) - 1)
 
-    def gamma_put(self,S,K,T,C):
-        sigma = self.iv_put(S,K,T,0,C)
+    def gamma_put(self,S,K,T,P):
+        sigma = self.iv_put(S,K,T,0,P)
         return 100 * norm.pdf(self.d1(S,K,T,0,sigma))/(S * sigma * np.sqrt(T))
 
-    def vega_put(self,S,K,T,C):
-        sigma = self.iv_put(S,K,T,0,C)
+    def vega_put(self,S,K,T,P):
+        sigma = self.iv_put(S,K,T,0,P)
         return 100 * norm.pdf(self.d1(S,K,T,0,sigma)) * S * np.sqrt(T)
 
-    def theta_put(self,S,K,T,C):
-        sigma = self.iv_put(S,K,T,0,C)
+    def theta_put(self,S,K,T,P):
+        sigma = self.iv_put(S,K,T,0,P)
         return 100 * S * norm.pdf(self.d1(S,K,T,0,sigma)) * sigma/(2 * np.sqrt(T))
+    
+    def update_greek_limits(self):
+        time = 1/4 - ((1/4 - 1/12) * (self.time_tick/600))
+        for strike in self.option_strikes:
+                        
+            mid_call = (self._best_bid[f"SPY{strike}C"] + self._best_ask[f"SPY{strike}C"]) / 2
+            mid_put = (self._best_bid[f"SPY{strike}P"] + self._best_ask[f"SPY{strike}P"]) / 2
+            # if mid_call == 0.0 or mid_put == 0.0:
+            #     print(mid_call)
+            #     print(mid_put)
+            iv_call = vectorized_implied_volatility(mid_call, self.underlying_price[-1], strike, time, 0, 'c', q=0, return_as='numpy')[0]
+            iv_put = vectorized_implied_volatility(mid_put, self.underlying_price[-1], strike, time, 0, 'p', q=0, return_as='numpy')[0]
+
+            
+            if not math.isnan(iv_call) and not math.isnan(iv_put):
+                call_option_price = self.compute_options_price('C', self.underlying_price[-1], strike, time, iv_call)
+                put_option_price = self.compute_options_price('P', self.underlying_price[-1], strike, time, iv_put)
+                
+                # Multiply each of the calulations by our current position of each individual option
+                call_position = self.positions[f"SPY{strike}C"]
+                put_position = self.positions[f"SPY{strike}P"]
+                
+                self.my_greek_limits["delta"] += call_position*self.delta_call(self.underlying_price[-1], strike, time, call_option_price) + put_position*self.delta_put(self.underlying_price[-1], strike, time, put_option_price)
+                
+                self.my_greek_limits["gamma"] += call_position*self.gamma_call(self.underlying_price[-1], strike, time, call_option_price) + put_position*self.gamma_put(self.underlying_price[-1], strike, time, put_option_price)
+                
+                self.my_greek_limits["theta"] += call_position*self.theta_call(self.underlying_price[-1], strike, time, call_option_price) + put_position*self.theta_put(self.underlying_price[-1], strike, time, put_option_price)
+                
+                self.my_greek_limits["vega"] += call_position*self.theta_call(self.underlying_price[-1], strike, time, call_option_price) + put_position*self.theta_put(self.underlying_price[-1], strike, time, put_option_price)
+    
     # Cumulative standard normal distribution
     def cdf(self,x):
         return (1.0 + erf(x / sqrt(2.0))) / 2.0
@@ -142,9 +176,9 @@ class OptionBot(UTCBot):
         """
         per_share_val = 0
         if(flag == 'C' or flag == 'c'):
-            per_share_val = self.my_bs('c', underlying_px, strike_px, time_to_expiry, 0.00, volatility)
+            per_share_val = self.black_scholes('c', underlying_px, strike_px, time_to_expiry, 0.00, volatility)
         elif(flag == 'P' or flag == 'p'):
-            per_share_val = self.my_bs('p', underlying_px, strike_px, time_to_expiry, 0.00, volatility)
+            per_share_val = self.black_scholes('p', underlying_px, strike_px, time_to_expiry, 0.00, volatility)
         if (per_share_val < 0.1):
             per_share_val = 0.1
         return np.round(per_share_val, 1)
@@ -158,25 +192,23 @@ class OptionBot(UTCBot):
         # This variable will be a map from asset names to positions. We start out by initializing it
         # to zero for every asset.
         self.positions = {}
+        self.option_strikes = range(65,140,5)
 
         self.positions["SPY"] = 0
         for strike in self.option_strikes:
             for flag in ["C", "P"]:
                 self.positions[f"SPY{strike}{flag}"] = 0
 
-        # Stores the current day (starting from 0 and ending at 5). This is a floating point number,
-        # meaning that it includes information about partial days
-        self.current_day = 0
+        self._best_bid: Dict[str, float] = defaultdict(lambda: 0)
+        self._best_ask: Dict[str, float] = defaultdict(lambda: 0)
+        self.__orders: DefaultDict[str, Tuple[str, float]] = defaultdict(lambda: ("", 0))
 
-        # Stores the current value of the underlying asset
-        self.underlying_price = 100
+        
+        self.underlying_price = [100]
         self.time_tick = 0
         self.pnls = [0.0] * 1000
         self.price_path = []
-        self.puts100 = []
-        self.calls100 = []
         self.vols = []
-        self.C100_price = 0
         self.greek_limits = {
             "delta": 2000,
             "gamma": 5000,
@@ -195,141 +227,163 @@ class OptionBot(UTCBot):
         await asyncio.sleep(0.1)
         asyncio.create_task(self.handle_read_params())
         
-    def add_trades(self):
+    async def add_trades(self):
         requests = []
-        day = np.floor(self.current_day)
-        dte = 26-day
-        time_to_expiry = dte / 252
-        theo = self.compute_options_price('p', self.underlying_price, 100, time_to_expiry, self.compute_vol_estimate())
+        count = 0
+        time_to_expiry = 1/4 - ((1/4 - 1/12) * (self.time_tick/600))
         
-        if(len(self.price_path) == 200):
-            for i in range(20):
-                # label = f"covid_{i}"
-                requests.append(
-                    self.modify_order(
-                        # label,
-                        "SPY100P",
-                        pb.OrderSpecType.LIMIT,
-                        pb.OrderSpecSide.BID,
-                        1,
-                        theo,
-                    )
-                )
-        if(theo*100 > 900):
-            for i in range(20):
-                # label = f"covid_{i}"
-                requests.append(
-                    self.modify_order(
-                        label,
-                        "SPY100P",
-                        pb.OrderSpecType.LIMIT,
-                        pb.OrderSpecSide.ASK,
-                        1,
-                        theo,
-                    )
-                )
-        return requests
-    
-    async def update_options_quotes(self):
-        time_to_expiry = (21+5-self.current_day) / 252
-        vol = self.compute_vol_estimate()
-        thresh_val = .25/2000
+        
         for strike in self.option_strikes:
             for flag in ["C", "P"]:
-                asset_name = f"SPY{strike}{flag}"
-                theo = self.compute_options_price(
-                    flag, self.underlying_price, strike, time_to_expiry, vol
-                )
-                # calculate price threshold used in bid and ask orders
-                callbid_putask_threshold = round((thresh_val)*(self.pos_delta)+.25,1)
-                callask_putbid_threshold = round(-(thresh_val)*(self.pos_delta)+.25,1)
-                # calculate order quantity based on position held currently
-                position = self.positions[f"SPY{strike}{flag}"]
-                if (position<0):
-                    if (position>-73):
-                        buy_quantity = 1
-                    else:
-                        buy_quantity = round((position**2)/4000)
-                    sell_quantity = 1
-                elif(position>=0):
-                    if (position<73):
-                        sell_quantity = 1
-                    else:
-                        sell_quantity = round((position**2)/4000)
-                    buy_quantity = 1
-                # continuously place bid and ask orders
-                if(flag=="C"):
-                    bid_response = await self.place_order(
-                        asset_name,
-                        pb.OrderSpecType.LIMIT,
-                        pb.OrderSpecSide.BID,
-                        buy_quantity,
-                        theo - callbid_putask_threshold,
-                    )
-                    assert bid_response.ok
-                    ask_response = await self.place_order(
-                        asset_name,
-                        pb.OrderSpecType.LIMIT,
-                        pb.OrderSpecSide.ASK,
-                        sell_quantity,
-                        theo + callask_putbid_threshold,
-                    )
-                    assert ask_response.ok
-                elif(flag=="P"):
-                    bid_response = await self.place_order(
-                        asset_name,
-                        pb.OrderSpecType.LIMIT,
-                        pb.OrderSpecSide.BID,
-                        buy_quantity,
-                        theo - callask_putbid_threshold,
-                    )
-                    assert bid_response.ok
-                    ask_response = await self.place_order(
-                        asset_name,
-                        pb.OrderSpecType.LIMIT,
-                        pb.OrderSpecSide.ASK,
-                        sell_quantity,
-                        theo + callbid_putask_threshold,
-                    )
-                    assert ask_response.ok
-        # reset position delta to 0
-        self.pos_delta=0
+                theo = self.compute_options_price(flag, self.underlying_price, strike, time_to_expiry, self.compute_vol_estimate())
+                asset = f"SPY{strike}{flag}"
+                
+                best_bid = self.books[asset].bids[0].px
+                best_ask = self.books[asset].asks[0].px
+                
+                # Temp penny values
+                penny_bid_price = best_bid + 0.01
+                penny_ask_price = best_ask - 0.01
+                
+                if penny_ask_price >= theo:
+                    a = self.modify_order(f"PENNY_ASK{asset}", asset, pb.OrderSpecType.LIMIT, pb.OrderSpecSide.ASK, 100, round_nearest(penny_ask_price, TICK_SIZE))
+                
+                if penny_bid_price <= theo:
+                    b = self.modify_order(f"PENNY_BID{asset}", asset, pb.OrderSpecType.LIMIT, pb.OrderSpecSide.BID, 100, round_nearest(penny_bid_price, TICK_SIZE))
+                
+
+    
+    # async def update_options_quotes(self):
+    #     time_to_expiry = 1/4 - ((1/4 - 1/12) * (self.time_tick/600))
+    #     vol = self.compute_vol_estimate()
+    #     thresh_val = .25/2000
+    #     for strike in self.option_strikes:
+    #         for flag in ["C", "P"]:
+    #             asset_name = f"SPY{strike}{flag}"
+    #             theo = self.compute_options_price(
+    #                 flag, self.underlying_price, strike, time_to_expiry, vol
+    #             )
+    #             # calculate price threshold used in bid and ask orders
+    #             callbid_putask_threshold = round((thresh_val)*(self.pos_delta)+.25,1)
+    #             callask_putbid_threshold = round(-(thresh_val)*(self.pos_delta)+.25,1)
+    #             # calculate order quantity based on position held currently
+    #             position = self.positions[f"SPY{strike}{flag}"]
+    #             if (position<0):
+    #                 if (position>-73):
+    #                     buy_quantity = 1
+    #                 else:
+    #                     buy_quantity = round((position**2)/4000)
+    #                 sell_quantity = 1
+    #             elif(position>=0):
+    #                 if (position<73):
+    #                     sell_quantity = 1
+    #                 else:
+    #                     sell_quantity = round((position**2)/4000)
+    #                 buy_quantity = 1
+    #             # continuously place bid and ask orders
+    #             if(flag=="C"):
+    #                 bid_response = await self.place_order(
+    #                     asset_name,
+    #                     pb.OrderSpecType.LIMIT,
+    #                     pb.OrderSpecSide.BID,
+    #                     buy_quantity,
+    #                     theo - callbid_putask_threshold,
+    #                 )
+    #                 assert bid_response.ok
+    #                 ask_response = await self.place_order(
+    #                     asset_name,
+    #                     pb.OrderSpecType.LIMIT,
+    #                     pb.OrderSpecSide.ASK,
+    #                     sell_quantity,
+    #                     theo + callask_putbid_threshold,
+    #                 )
+    #                 assert ask_response.ok
+    #             elif(flag=="P"):
+    #                 bid_response = await self.place_order(
+    #                     asset_name,
+    #                     pb.OrderSpecType.LIMIT,
+    #                     pb.OrderSpecSide.BID,
+    #                     buy_quantity,
+    #                     theo - callask_putbid_threshold,
+    #                 )
+    #                 assert bid_response.ok
+    #                 ask_response = await self.place_order(
+    #                     asset_name,
+    #                     pb.OrderSpecType.LIMIT,
+    #                     pb.OrderSpecSide.ASK,
+    #                     sell_quantity,
+    #                     theo + callbid_putask_threshold,
+    #                 )
+    #                 assert ask_response.ok
+    #     # reset position delta to 0
+    #     self.pos_delta=0
 
     async def handle_exchange_update(self, update: pb.FeedMessage):
+        self.my_greek_limits = {
+            "delta": 0,
+            "gamma": 0,
+            "theta": 0,
+            "vega": 0
+        }
+        self.time_tick += 1
         kind, _ = betterproto.which_one_of(update, "msg")
         # Competition event messages
         if kind == "pnl_msg":
             # When you hear from the exchange about your PnL, print it out
-            print("My PnL:", update.pnl_msg.m2m_pnl)
-            print(f"Positions: {self.positions}")
-            # index = self.time_tick
-            # self.pnls[index] = float(update.pnl_msg.m2m_pnl)
-            # for _ in range(3):
-            #     if index != 999:
-            #         index += 1
-            #         self.pnls[index] = float(update.pnl_msg.m2m_pnl)
-        elif kind == "market_snapshop_msg":
-            self.books["SPY"] = update.market_snapshot_msg.books["SPY"]
-            for strike in self.option_strikes:
-                self.books[f"SPY{strike}C"] = update.market_snapshot_msg.books[f"SPY{strike}C"]
-                self.books[f"SPY{strike}P"] = update.market_snapshot_msg.books[f"SPY{strike}P"]
+            print('Realized pnl:', update.pnl_msg.realized_pnl, "| M2M pnl:", update.pnl_msg.m2m_pnl)
+            # print(f"Positions: {self.positions}")
+        elif kind == "fill_msg":
+            # When you hear about a fill you had, update your positions
+            fill_msg = update.fill_msg
+
+            if fill_msg.order_side == pb.FillMessageSide.BUY:
+                self.positions[fill_msg.asset] += update.fill_msg.filled_qty
+            else:
+                self.positions[fill_msg.asset] -= update.fill_msg.filled_qty
                 
-            book = update.market_snapshot_msg.books["SPY"]
-            
-            if (len(book.bids) > 0):
-                self.underlying_price = (
+        elif kind == "market_snapshot_msg":
+            self.books["SPY"] = update.market_snapshot_msg.books["SPY"]
+            for asset in TICKERS:
+                book = update.market_snapshot_msg.books[asset]
+                self.books[asset] = update.market_snapshot_msg.books[asset]
+                best_bid = max(book.bids, key=attrgetter('px'), default=None)
+                best_ask = min(book.asks, key=attrgetter('px'), default=None)
+                self._best_bid[asset] = float(best_bid.px) if best_bid is not None else 0
+                self._best_ask[asset] = float(best_ask.px) if best_ask is not None else 0
+                
+                
+            book = update.market_snapshot_msg.books["SPY"]            
+            if (len(book.bids) > 0) and (len(book.asks) > 0):
+                self.underlying_price.append((
                     float(book.bids[0].px) + float(book.asks[0].px)
-                ) / 2
-            if (self.current_day < 599):
-                await self.update_options_quotes()
-            self.update_greek_limits()
-            print(self.positions)
+                ) / 2)
+                self.update_greek_limits()
+            print(self.my_greek_limits)
+                
+            # if (self.time_tick < 599):
+            #     await self.update_options_quotes()
+            # print(self.positions)
+            
+        elif (
+            kind == "generic_msg"
+            and update.generic_msg.event_type == pb.GenericMessageType.MESSAGE
+        ):
+            # The platform will regularly send out what day it currently is (starting from day 0 at
+            # the start of the case) 
+            # print(f"Positions: {self.positions}")
+            # self.price_path.append(self.underlying_price)
+            # print(f"New Price: {self.underlying_price}")
+            
+            # print("Underlying ", self.underlying_price)
+            if (self.time_tick == 599):
+                # self.market_closed()
+                pass
                 
 
     async def handle_read_params(self):
         while True:
             try:
-                self.params = orjson.loads(open(PARAM_FILE, "r").read())
+                self.params = json.load(open(PARAM_FILE, "r"))
             except:
                 print("Unable to read file " + PARAM_FILE)
 
