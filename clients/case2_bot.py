@@ -201,11 +201,11 @@ class OptionBot(UTCBot):
         
         if(len(self.price_path) == 200):
             for i in range(20):
-                label = f"covid_{i}"
+                # label = f"covid_{i}"
                 requests.append(
                     self.modify_order(
                         label,
-                        "UC100P",
+                        "SPY100P",
                         pb.OrderSpecType.LIMIT,
                         pb.OrderSpecSide.BID,
                         1,
@@ -214,11 +214,11 @@ class OptionBot(UTCBot):
                 )
         if(theo*100 > 900):
             for i in range(20):
-                label = f"covid_{i}"
+                # label = f"covid_{i}"
                 requests.append(
                     self.modify_order(
                         label,
-                        "UC100P",
+                        "SPY100P",
                         pb.OrderSpecType.LIMIT,
                         pb.OrderSpecSide.ASK,
                         1,
@@ -226,6 +226,71 @@ class OptionBot(UTCBot):
                     )
                 )
         return requests
+    
+    async def update_options_quotes(self):
+        time_to_expiry = (21+5-self.current_day) / 252
+        vol = self.compute_vol_estimate()
+        thresh_val = .25/2000
+        for strike in self.option_strikes:
+            for flag in ["C", "P"]:
+                asset_name = f"UC{strike}{flag}"
+                theo = self.compute_options_price(
+                    flag, self.underlying_price, strike, time_to_expiry, vol
+                )
+                # calculate price threshold used in bid and ask orders
+                callbid_putask_threshold = round((thresh_val)*(self.pos_delta)+.25,1)
+                callask_putbid_threshold = round(-(thresh_val)*(self.pos_delta)+.25,1)
+                # calculate order quantity based on position held currently
+                position = self.positions[f"SPY{strike}{flag}"]
+                if (position<0):
+                    if (position>-73):
+                        buy_quantity = 1
+                    else:
+                        buy_quantity = round((position**2)/4000)
+                    sell_quantity = 1
+                elif(position>=0):
+                    if (position<73):
+                        sell_quantity = 1
+                    else:
+                        sell_quantity = round((position**2)/4000)
+                    buy_quantity = 1
+                # continuously place bid and ask orders
+                if(flag=="C"):
+                    bid_response = await self.place_order(
+                        asset_name,
+                        pb.OrderSpecType.LIMIT,
+                        pb.OrderSpecSide.BID,
+                        buy_quantity,
+                        theo - callbid_putask_threshold,
+                    )
+                    assert bid_response.ok
+                    ask_response = await self.place_order(
+                        asset_name,
+                        pb.OrderSpecType.LIMIT,
+                        pb.OrderSpecSide.ASK,
+                        sell_quantity,
+                        theo + callask_putbid_threshold,
+                    )
+                    assert ask_response.ok
+                elif(flag=="P"):
+                    bid_response = await self.place_order(
+                        asset_name,
+                        pb.OrderSpecType.LIMIT,
+                        pb.OrderSpecSide.BID,
+                        buy_quantity,
+                        theo - callask_putbid_threshold,
+                    )
+                    assert bid_response.ok
+                    ask_response = await self.place_order(
+                        asset_name,
+                        pb.OrderSpecType.LIMIT,
+                        pb.OrderSpecSide.ASK,
+                        sell_quantity,
+                        theo + callbid_putask_threshold,
+                    )
+                    assert ask_response.ok
+        # reset position delta to 0
+        self.pos_delta=0
 
     async def handle_exchange_update(self, update: pb.FeedMessage):
         kind, _ = betterproto.which_one_of(update, "msg")
