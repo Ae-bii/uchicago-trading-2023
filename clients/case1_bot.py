@@ -9,7 +9,7 @@ from proto import utc_bot as pb
 import betterproto
 import asyncio
 import re
-import orjson
+import json
 from operator import attrgetter
 
 DAYS_IN_MONTH = 21
@@ -109,8 +109,8 @@ class Case1Bot(UTCBot):
                 book = update.market_snapshot_msg.books[asset]
                 best_bid = max(book.bids, key=attrgetter('px'), default=None)
                 best_ask = min(book.asks, key=attrgetter('px'), default=None)
-                self._best_bid[asset] = float(best_bid.px) if best_bid is not None else 0
-                self._best_ask[asset] = float(best_ask.px) if best_ask is not None else 0
+                self._best_bid[asset] = (float(best_bid.px), best_bid.qty) if best_bid is not None else (0, 0)
+                self._best_ask[asset] = (float(best_ask.px), best_ask.qty) if best_ask is not None else (0, 0)
             
             # self.soy_prices[self._day] = (self._best_bid['SBL'] + self._best_ask['SBL']) / 2
 
@@ -133,18 +133,17 @@ class Case1Bot(UTCBot):
             # for id in ids:
                 # self.__orders[id] = ("", 0)
                 # pass
-            
 
     async def handle_round_started(self):
         ### Current day
         self._day = 0
         ### Best Bid in the order book
-        self._best_bid: Dict[str, float] = defaultdict(lambda: 0)
+        self._best_bid: Dict[str, Tuple[float, int]] = defaultdict(lambda: (0, 0))
         ### Best Ask in the order book
-        self._best_ask: Dict[str, float] = defaultdict(lambda: 0)
+        self._best_ask: Dict[str, Tuple[float, int]] = defaultdict(lambda: (0, 0))
         ### Order book for market making
-        self.__orders: DefaultDict[str, Tuple[str, float]] = defaultdict(lambda: ("", 0))
-        self.__order_id_map: DefaultDict[str, str] = defaultdict(lambda: "")
+        self.__orders: DefaultDict[str, Tuple[str, float, int]] = defaultdict(lambda: ("", 0, 0))
+        self.__id_to_order: DefaultDict[str, str] = defaultdict(lambda: "")
         ### TODO Recording fair price for each asset
         self._fair_price: DefaultDict[str, float] = defaultdict(lambda: 0)
         ### TODO spread fair price for each asset
@@ -164,10 +163,11 @@ class Case1Bot(UTCBot):
         asyncio.create_task(self.handle_read_params())
         # asyncio.create_task(self.send_bogus_orders())
         asyncio.create_task(self.print_positions())
-        
+        # asyncio.create_task(self.arbitrage_etf())
+
         # Starts market making for each asset
         for asset in CONTRACTS:
-            asyncio.create_task(self.make_market_asset(asset))
+            asset_task = asyncio.create_task(self.make_market_asset(asset))
 
     async def calculate_asset_price(self, asset: str):
         if asset == 'SBL':
@@ -191,6 +191,99 @@ class Case1Bot(UTCBot):
         self._fair_price['SBL'] = pred
         # self._spread['SBL'] = conf
 
+    async def arbitrage_etf(self): 
+        while self._day <= DAYS_IN_YEAR:
+            mth = ord('A') + math.floor(self._day / 22)
+            nav_ask = 0
+            nav_bid = 0
+            ask_qty = []
+            bid_qty = []
+            etf_ask, etf_ask_q = self._best_ask['LLL']
+            etf_bid, etf_bid_q = self._best_bid['LLL'] 
+            tickers = []
+            mult = [5, 3, 2]
+
+            for i in range(mth, mth + 3):
+                mult_idx = i - mth
+                ticker = 'LBS' + chr(i)
+                tickers.append(ticker)
+
+                nav_ask += self._best_ask[ticker][0] * mult_idx
+                ask_qty.append(self._best_ask[ticker][1])
+
+                nav_bid += self._best_bid[ticker][0] * mult_idx
+                bid_qty.append(self._best_bid[ticker][1])
+            
+            # if the price to sell etf is higher than the value to buy underlying assets
+            # buy underlying assets, create etf, sell etf
+            if etf_bid - nav_ask > 0.10:
+                etf_qty = min(int(min(ask_qty[0] / 5, ask_qty[1] / 3, ask_qty[2] / 2, etf_bid_q)), 20)
+
+                for i in range(3):
+                    id = self.__orders[ticker[i] + '_arb'][0]
+                    qty = etf_qty * mult[i]
+                    price = self._best_ask[tickers[i]][1]
+                    r = await self.modify_order(
+                        order_id=id,
+                        asset_code=tickers[i],
+                        order_type=pb.OrderSpecType.LIMIT,
+                        order_side=pb.OrderSpecSide.BID,
+                        qty=qty,
+                        px=price
+                    )
+
+                    if r.ok:
+                        self.__orders[ticker[i] + '_arb'] = (r.order_id, price, qty)
+
+                await self.create_etf(etf_qty)
+
+                r_etf = await self.place_order(
+                    asset_code='LLL',
+                    order_type=pb.OrderSpecType.LIMIT,
+                    order_side=pb.OrderSpecSide.ASK,
+                    qty=etf_qty,
+                    px=self._best_bid['LLL'][1]
+                )
+
+                if r_etf.ok:
+                    self.__orders['LLL_arb'] = (r_etf.order_id, self._best_bid['LLL'][0], -etf_qty)
+
+            # if the price to buy etf is lower than the price to sell underlying assets
+            # buy etf, redeem etf, sell underlying assets
+            if nav_bid - etf_ask > 0.10:
+                etf_qty = min(int(min(bid_qty[0] / 5, bid_qty[1] / 3, bid_qty[2] / 2, etf_ask_q)), 20)
+
+                r_etf = await self.place_order(
+                    asset_code='LLL',
+                    order_type=pb.OrderSpecType.LIMIT,
+                    order_side=pb.OrderSpecSide.BID,
+                    qty=etf_qty,
+                    px=self._best_bid['LLL'][1]
+                )
+
+                if r_etf.ok:
+                    self.__orders['LLL_arb'] = (r_etf.order_id, self._best_bid['LLL'][0], etf_qty)
+
+                await self.redeem_etf(etf_qty)
+
+                for i in range(3):
+                    id = self.__orders[ticker[i] + '_arb'][0]
+                    qty = etf_qty * mult[i]
+                    price = self._best_bid[tickers[i]][1]
+                    r = await self.modify_order(
+                        order_id=id,
+                        asset_code=tickers[i],
+                        order_type=pb.OrderSpecType.LIMIT,
+                        order_side=pb.OrderSpecSide.ASK,
+                        qty=qty,
+                        px=price
+                    )
+
+                    if r.ok:
+                        self.__orders[ticker[i] + '_arb'] = (r.order_id, price, -qty)
+            
+            await asyncio.sleep(1)
+
     async def calculate_future_price(self, asset: str):
         if self._fair_price['SBL'] == 0:
             await self.calculate_soy_price()
@@ -211,12 +304,12 @@ class Case1Bot(UTCBot):
         while self._day <= DAYS_IN_YEAR:
             # await self.calculate_asset_price(asset)
 
-            penny_ask_price = self._best_ask[asset] - 0.01 - self._fade[asset] * self.positions.get(asset, 0) / 100
-            penny_bid_price = self._best_bid[asset] + 0.01 - self._fade[asset] * self.positions.get(asset, 0) / 100
+            penny_ask_price = self._best_ask[asset][0] - 0.01 - self._fade[asset] * self.positions.get(asset, 0) / 100
+            penny_bid_price = self._best_bid[asset][0] + 0.01 - self._fade[asset] * self.positions.get(asset, 0) / 100
 
             if penny_ask_price - penny_bid_price > 0:
-                old_bid_id, _ = self.__orders[asset + '_bid']
-                old_ask_id, _ = self.__orders[asset + '_ask']
+                old_bid_id, _, __ = self.__orders[asset + '_bid']
+                old_ask_id, _, __ = self.__orders[asset + '_ask']
 
                 bid_resp = await self.modify_order(
                     old_bid_id,
@@ -228,8 +321,7 @@ class Case1Bot(UTCBot):
                 )
 
                 if bid_resp.ok:
-                    self.__orders[asset + '_bid'] = (str(penny_bid_price), bid_resp.order_id)
-                    # self.__order_id_map[bid_resp.order_id] = asset + '_bid'
+                    self.__orders[asset + '_bid'] = (bid_resp.order_id, penny_bid_price, SIZE_BASE)
 
                 ask_resp = await self.modify_order(
                     old_ask_id,
@@ -241,15 +333,14 @@ class Case1Bot(UTCBot):
                 )
 
                 if ask_resp.ok:
-                    self.__orders[asset + '_ask'] = (str(penny_ask_price), ask_resp.order_id)
-                    # self.__order_id_map[ask_resp.order_id] = asset + '_ask'
+                    self.__orders[asset + '_ask'] = (ask_resp.order_id, penny_ask_price, SIZE_BASE)
                 
                 for i in range(0, len(LEVEL_SIZES)):
                     lv = str(i + 1)
 
                     if (penny_bid_price - LEVEL_SPREADS[i]) > 0:
-                        old_bid_id, _ = self.__orders[asset + 'bid_L' + lv]
-                        old_ask_id, _ = self.__orders[asset + 'ask_L' + lv]
+                        old_bid_id, _, __ = self.__orders[asset + 'bid_L' + lv]
+                        old_ask_id, _, __ = self.__orders[asset + 'ask_L' + lv]
 
                         bid_resp = await self.modify_order(
                             old_bid_id,
@@ -261,8 +352,7 @@ class Case1Bot(UTCBot):
                         )
 
                         if bid_resp.ok:
-                            self.__orders[asset + '_bid_L' + lv] = (str(penny_bid_price - LEVEL_SPREADS[i]), bid_resp.order_id)
-                            # self.__order_id_map[bid_resp.order_id] = asset + '_bid' + lv
+                            self.__orders[asset + '_bid_L' + lv] = (bid_resp.order_id, penny_bid_price - LEVEL_SPREADS[i], LEVEL_SIZES[i])
 
                         ask_resp = await self.modify_order(
                             old_ask_id,
@@ -274,11 +364,10 @@ class Case1Bot(UTCBot):
                         )
 
                         if ask_resp.ok:
-                            self.__orders[asset + '_ask_L' + lv] = (str(penny_ask_price + LEVEL_SPREADS[i]), ask_resp.order_id)
-                            # self.__order_id_map[bid_resp.order_id] = asset + '_ask' + lv
+                            self.__orders[asset + '_ask_L' + lv] = (ask_resp.order_id, penny_ask_price + LEVEL_SPREADS[i], LEVEL_SIZES[i])
 
 
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.06)
 
     async def send_bogus_orders(self):
         for asset in CONTRACTS:
@@ -308,7 +397,7 @@ class Case1Bot(UTCBot):
     async def handle_read_params(self):
         while True:
             try:
-                params = orjson.loads(open(PARAM_FILE, "r").read())
+                params = json.load(open(PARAM_FILE, "r"))
                 for asset in CONTRACTS:
                     asset_str = asset if asset == 'SBL' or asset == 'LLL' else 'FUT'
                     self._spread[asset] = params[asset_str]['edge']
