@@ -236,7 +236,7 @@ class OptionBot(UTCBot):
         
     async def add_trades(self):
         while self.time_tick <= 600 and self.is_trade:
-            print(self.positions)
+            # print(self.positions)
             if self.my_greek_positions["delta"] >= 0.8 * self.greek_limits["delta"]:
                 for strike in self.option_strikes:
                     mid_call = (self._best_bid[f"SPY{strike}C"] + self._best_ask[f"SPY{strike}C"]) / 2
@@ -381,19 +381,19 @@ class OptionBot(UTCBot):
                         
                         old_bid_id, _ = self.__orders[asset + '_bid']
                         old_ask_id, _ = self.__orders[asset + '_ask']
-                        if asset != "SPY65C" and asset != "SPY135P":
-                            if self.positions.get(asset, 0) >= -50:
-                                if penny_ask_price > theo:
-                                    ask_resp = await self.modify_order(f"PENNY_ASK{asset}", asset, pb.OrderSpecType.LIMIT, pb.OrderSpecSide.ASK, 12, round_nearest(penny_ask_price, TICK_SIZE))
-                                    
-                                    if ask_resp.ok:
-                                        self.__orders[asset + '_ask'] = (str(penny_ask_price), ask_resp.order_id)
-                            if self.positions.get(asset, 0) <= 50:
-                                if penny_bid_price < theo:
-                                    bid_resp = await self.modify_order(f"PENNY_BID{asset}", asset, pb.OrderSpecType.LIMIT, pb.OrderSpecSide.BID, 12, round_nearest(penny_bid_price, TICK_SIZE))
-                                    
-                                    if bid_resp.ok:
-                                        self.__orders[asset + '_bid'] = (str(penny_bid_price), bid_resp.order_id)
+                        # if asset != "SPY65C" and asset != "SPY135P":
+                        if self.positions.get(asset, 0) >= -50:
+                            if penny_ask_price > theo:
+                                ask_resp = await self.modify_order(f"PENNY_ASK{asset}", asset, pb.OrderSpecType.LIMIT, pb.OrderSpecSide.ASK, 12, round_nearest(penny_ask_price, TICK_SIZE))
+                                
+                                if ask_resp.ok:
+                                    self.__orders[asset + '_ask'] = (str(penny_ask_price), ask_resp.order_id)
+                        if self.positions.get(asset, 0) <= 50:
+                            if penny_bid_price < theo:
+                                bid_resp = await self.modify_order(f"PENNY_BID{asset}", asset, pb.OrderSpecType.LIMIT, pb.OrderSpecSide.BID, 12, round_nearest(penny_bid_price, TICK_SIZE))
+                                
+                                if bid_resp.ok:
+                                    self.__orders[asset + '_bid'] = (str(penny_bid_price), bid_resp.order_id)
                                 
             await asyncio.sleep(1)
                 
@@ -408,7 +408,6 @@ class OptionBot(UTCBot):
             "theta": 0,
             "vega": 0
         }
-        self.update_greek_limits()
         self.time_tick += 1
         kind, _ = betterproto.which_one_of(update, "msg")
         # Competition event messages
@@ -452,6 +451,8 @@ class OptionBot(UTCBot):
                 self.underlying_price.append((
                     float(book.bids[0].px) + float(book.asks[0].px)
                 ) / 2)
+                self.update_greek_limits()
+
             print(self.my_greek_positions)
 
                 
