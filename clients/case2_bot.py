@@ -385,13 +385,13 @@ class OptionBot(UTCBot):
                         if asset != "SPY65C" and asset != "SPY135P":
                             if self.positions.get(asset, 0) >= -50:
                                 if penny_ask_price > theo:
-                                    ask_resp = await self.modify_order(f"PENNY_ASK{asset}", asset, pb.OrderSpecType.LIMIT, pb.OrderSpecSide.ASK, 15, round_nearest(penny_ask_price, TICK_SIZE))
+                                    ask_resp = await self.modify_order(f"PENNY_ASK{asset}", asset, pb.OrderSpecType.LIMIT, pb.OrderSpecSide.ASK, 12, round_nearest(penny_ask_price, TICK_SIZE))
                                     
                                     if ask_resp.ok:
                                         self.__orders[asset + '_ask'] = (str(penny_ask_price), ask_resp.order_id)
                             if self.positions.get(asset, 0) <= 50:
                                 if penny_bid_price < theo:
-                                    bid_resp = await self.modify_order(f"PENNY_BID{asset}", asset, pb.OrderSpecType.LIMIT, pb.OrderSpecSide.BID, 15, round_nearest(penny_bid_price, TICK_SIZE))
+                                    bid_resp = await self.modify_order(f"PENNY_BID{asset}", asset, pb.OrderSpecType.LIMIT, pb.OrderSpecSide.BID, 12, round_nearest(penny_bid_price, TICK_SIZE))
                                     
                                     if bid_resp.ok:
                                         self.__orders[asset + '_bid'] = (str(penny_bid_price), bid_resp.order_id)
