@@ -104,13 +104,13 @@ class OptionBot(UTCBot):
                 call_position = self.positions.get(f"SPY{strike}C", 0)
                 put_position = self.positions.get(f"SPY{strike}P", 0)
                 
-                self.my_greek_limits["delta"] += call_position*self.delta_call(self.underlying_price[-1], strike, self.time_to_expiry, call_option_price) + put_position*self.delta_put(self.underlying_price[-1], strike, self.time_to_expiry, put_option_price)
+                self.my_greek_positions["delta"] += call_position*self.delta_call(self.underlying_price[-1], strike, self.time_to_expiry, call_option_price) + put_position*self.delta_put(self.underlying_price[-1], strike, self.time_to_expiry, put_option_price)
                 
-                self.my_greek_limits["gamma"] += call_position*self.gamma_call(self.underlying_price[-1], strike, self.time_to_expiry, call_option_price) + put_position*self.gamma_put(self.underlying_price[-1], strike, self.time_to_expiry, put_option_price)
+                self.my_greek_positions["gamma"] += call_position*self.gamma_call(self.underlying_price[-1], strike, self.time_to_expiry, call_option_price) + put_position*self.gamma_put(self.underlying_price[-1], strike, self.time_to_expiry, put_option_price)
                 
-                self.my_greek_limits["theta"] += call_position*self.theta_call(self.underlying_price[-1], strike, self.time_to_expiry, call_option_price) + put_position*self.theta_put(self.underlying_price[-1], strike, self.time_to_expiry, put_option_price)
+                self.my_greek_positions["theta"] += call_position*self.theta_call(self.underlying_price[-1], strike, self.time_to_expiry, call_option_price) + put_position*self.theta_put(self.underlying_price[-1], strike, self.time_to_expiry, put_option_price)
                 
-                self.my_greek_limits["vega"] += call_position*self.theta_call(self.underlying_price[-1], strike, self.time_to_expiry, call_option_price) + put_position*self.theta_put(self.underlying_price[-1], strike, self.time_to_expiry, put_option_price)
+                self.my_greek_positions["vega"] += call_position*self.theta_call(self.underlying_price[-1], strike, self.time_to_expiry, call_option_price) + put_position*self.theta_put(self.underlying_price[-1], strike, self.time_to_expiry, put_option_price)
     
     # Cumulative standard normal distribution
     def cdf(self,x):
@@ -199,8 +199,11 @@ class OptionBot(UTCBot):
                 self.positions[f"SPY{strike}{flag}"] = 0
 
         self._best_bid: Dict[str, float] = defaultdict(lambda: 0)
+        self._second_best_bid: Dict[str, float] = defaultdict(lambda: 0)
         self._best_ask: Dict[str, float] = defaultdict(lambda: 0)
+        self._second_best_ask: Dict[str, float] = defaultdict(lambda: 0)
         self.__orders: DefaultDict[str, Tuple[str, float]] = defaultdict(lambda: ("", 0))
+        self._fade: DefaultDict[str, float] = defaultdict(lambda: 0)
 
         self.underlying_price = [100]
         self.time_tick = 0
@@ -215,7 +218,7 @@ class OptionBot(UTCBot):
             "theta": 50000,
             "vega": 1000000
         }
-        self.my_greek_limits = {
+        self.my_greek_positions = {
             "delta": 0,
             "gamma": 0,
             "theta": 0,
@@ -231,12 +234,13 @@ class OptionBot(UTCBot):
         
     async def add_trades(self):
         while self.time_tick <= 600:
-            if self.my_greek_limits["delta"] >= 0.8 * self.greek_limits["delta"]:
-                order_quantity = self.my_greek_limits["delta"] - 0.8*self.greek_limits["delta"]
-                stock_resp = await self.modify_order("SPY", "SPY", pb.OrderSpecType.MARKET, pb.OrderSpecSide.ASK, 100)
-            elif self.my_greek_limits["delta"] > 0.8 * -self.greek_limits["delta"]:
-                order_quantity =  0.8*self.greek_limits["delta"] - self.my_greek_limits["delta"]
-                stock_resp = await self.modify_order("SPY", "SPY", pb.OrderSpecType.MARKET, pb.OrderSpecSide.BID, 100)
+            # if self.my_greek_positions["delta"] >= 0.8 * self.greek_limits["delta"]:
+            #     order_quantity = self.my_greek_positions["delta"] - 0.8*self.greek_limits["delta"]
+            #     await self.modify_order("SPY", "SPY", pb.OrderSpecType.MARKET, pb.OrderSpecSide.ASK, min(order_quantity, 15))
+            # elif self.my_greek_positions["delta"] < 0.8 * -self.greek_limits["delta"]:
+            #     order_quantity =  -0.8*self.greek_limits["delta"] - self.my_greek_positions["delta"]
+            #     await self.modify_order("SPY", "SPY", pb.OrderSpecType.MARKET, pb.OrderSpecSide.BID, min(order_quantity, 15))
+                
             
             for strike in self.option_strikes:
                 for flag in ["C", "P"]:
@@ -252,8 +256,20 @@ class OptionBot(UTCBot):
                         asset = f"SPY{strike}{flag}"
                         
                         # Temp penny values
+                        # if self.my_greek_positions["theta"] >= 0.8 * self.greek_limits["theta"]:
+                        #     best_bid = self._second_best_bid[f"SPY{strike}{flag}"]
+                        # elif self.my_greek_positions["theta"] < 0.8 * -self.greek_limits["theta"]:
+                        #     best_ask = self._second_best_ask[f"SPY{strike}{flag}"]
+                        
                         penny_bid_price = best_bid + 0.01
-                        penny_ask_price = best_ask - 0.01
+                        penny_ask_price = best_ask - 0.01 - self._fade[asset] * self.positions.get(asset, 0) / 100
+                        
+                        if self.my_greek_positions["theta"] >= 0.8 * self.greek_limits["theta"]:
+                            penny_bid_price += self._fade[asset] * self.positions.get(asset, 0) / 100
+                            penny_ask_price += self._fade[asset] * self.positions.get(asset, 0) / 100
+                        elif self.my_greek_positions["theta"] < 0.8 * -self.greek_limits["theta"]:
+                            penny_bid_price -= self._fade[asset] * self.positions.get(asset, 0) / 100
+                            penny_ask_price -= self._fade[asset] * self.positions.get(asset, 0) / 100
                         
                         # print(f"Theoretical {asset}: {theo}")
                         # print(f"Penny Bid {asset}: {penny_bid_price}")
@@ -343,7 +359,7 @@ class OptionBot(UTCBot):
     #     self.pos_delta=0
 
     async def handle_exchange_update(self, update: pb.FeedMessage):
-        self.my_greek_limits = {
+        self.my_greek_positions = {
             "delta": 0,
             "gamma": 0,
             "theta": 0,
@@ -369,11 +385,19 @@ class OptionBot(UTCBot):
             self.books["SPY"] = update.market_snapshot_msg.books["SPY"]
             for asset in TICKERS:
                 book = update.market_snapshot_msg.books[asset]
+                
                 self.books[asset] = update.market_snapshot_msg.books[asset]
                 best_bid = max(book.bids, key=attrgetter('px'), default=None)
+                second_best_bid = book.bids[1] if len(book.bids) > 1 else None
+                
                 best_ask = min(book.asks, key=attrgetter('px'), default=None)
+                second_best_ask = book.asks[1] if len(book.asks) > 1 else None
+                
                 self._best_bid[asset] = float(best_bid.px) if best_bid is not None else 0
+                self._second_best_bid[asset] = float(second_best_bid.px) if second_best_bid is not None else 0
+                
                 self._best_ask[asset] = float(best_ask.px) if best_ask is not None else 0
+                self._second_best_ask[asset] = float(second_best_ask.px) if second_best_ask is not None else 0
                 
                 
             book = update.market_snapshot_msg.books["SPY"]            
@@ -382,7 +406,7 @@ class OptionBot(UTCBot):
                     float(book.bids[0].px) + float(book.asks[0].px)
                 ) / 2)
                 self.update_greek_limits()
-                print(self.my_greek_limits)
+                print(self.my_greek_positions)
                 
             # if (self.time_tick < 599):
             #     await self.update_options_quotes()
@@ -411,6 +435,11 @@ class OptionBot(UTCBot):
         while True:
             try:
                 self.params = json.load(open(PARAM_FILE, "r"))
+                for asset in TICKERS:
+                    # self._spread[asset] = params[asset_str]['edge']
+                    self._fade[asset] = self.params['fade'][asset]
+                    # self._quantity[asset] = params[asset_str]['size']
+                    # self._slack[asset] = params[asset_str]['slack']
             except:
                 print("Unable to read file " + PARAM_FILE)
 
