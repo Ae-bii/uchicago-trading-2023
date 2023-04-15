@@ -15,7 +15,22 @@
         "SPY120C_Penny": 0.01,
         "SPY125C_Penny": 0.01,
         "SPY130C_Penny": 0.01,
-        "SPY135C_Penny": 0.01
+        "SPY135C_Penny": 0.01,
+        "SPY65P_Penny": 0.01,
+        "SPY70P_Penny": 0.01,
+        "SPY75P_Penny": 0.01,
+        "SPY80P_Penny": 0.01,
+        "SPY85P_Penny": 0.01,
+        "SPY90P_Penny": 0.01,
+        "SPY95P_Penny": 0.01,
+        "SPY100P_Penny": 0.01,
+        "SPY105P_Penny": 0.01,
+        "SPY110P_Penny": 0.01,
+        "SPY115P_Penny": 0.01,
+        "SPY120P_Penny": 0.01,
+        "SPY125P_Penny": 0.01,
+        "SPY130P_Penny": 0.01,
+        "SPY135P_Penny": 0.01
     },
     "ladder_values": {
         "65C_ladder": 0.01,

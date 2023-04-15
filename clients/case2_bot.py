@@ -24,7 +24,6 @@ TICKERS = TICKERS_CALL + TICKERS_PUT
 PARAM_FILE = "clients/params/case2_params.json"
 
 
-
 class OptionBot(UTCBot):
     """
     An example bot that reads from a file to set internal parameters during the round
@@ -218,7 +217,7 @@ class OptionBot(UTCBot):
         self.greek_limits = {
             "delta": 2000,
             "gamma": 5000,
-            "theta": 50000,
+            "theta": 5000,
             "vega": 1000000
         }
         self.my_greek_positions = {
@@ -409,6 +408,7 @@ class OptionBot(UTCBot):
             "theta": 0,
             "vega": 0
         }
+        self.update_greek_limits()
         self.time_tick += 1
         kind, _ = betterproto.which_one_of(update, "msg")
         # Competition event messages
@@ -452,8 +452,8 @@ class OptionBot(UTCBot):
                 self.underlying_price.append((
                     float(book.bids[0].px) + float(book.asks[0].px)
                 ) / 2)
-                self.update_greek_limits()
-                print(self.my_greek_positions)
+            print(self.my_greek_positions)
+
                 
             # if (self.time_tick < 599):
             #     await self.update_options_quotes()
@@ -481,12 +481,12 @@ class OptionBot(UTCBot):
     async def handle_read_params(self):
         while True:
             try:
-                self.params = json.load(open(PARAM_FILE, "r"))
+                params = json.load(open(PARAM_FILE, "r"))
                 for asset in TICKERS:
                     # self._spread[asset] = params[asset_str]['edge']
-                    self.is_trade = True if self.params['is_trading'] == 1 else False
-                    self._penny_values[asset] = self.params['penny_values'][asset + '_Penny']
-                    self._fade[asset] = self.params['fade'][asset]
+                    self.is_trade = True if params['is_trading'] == 1 else False
+                    self._penny_values[asset] = params['penny_values'][asset + '_Penny']
+                    self._fade[asset] = params['fade'][asset]
                     # self._quantity[asset] = params[asset_str]['size']
                     # self._slack[asset] = params[asset_str]['slack']
             except:
