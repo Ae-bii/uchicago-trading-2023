@@ -10,5 +10,8 @@
     "LLL": {
         "fade": 0.02,
         "slack": 0.10
-    }
+    },
+    "size_base": 25,
+    "level_sizes": [10, 5, 5],
+    "level_spreads": [0.05, 0.15, 0.25]
 }

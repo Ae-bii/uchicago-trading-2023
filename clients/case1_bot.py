@@ -38,15 +38,15 @@ SBL_VAR = 9.113656672214566e-05
 
 PARAM_FILE = "clients/params/case1_params.json"
 
-SIZE_BASE = 25
-LEVEL_SIZES = [10, 5, 5]
-LEVEL_SPREADS = [0.05, 0.15, 0.25]
-
 class Case1Bot(UTCBot):
     etf_suffix = ''
 
     soy_prices = np.zeros(DAYS_IN_YEAR)
     soy_prices[0] = 53.803717019730705
+
+    size_base = 25
+    level_sizes = [10, 5, 5]
+    level_spreads = [0.05, 0.15, 0.25]
 
     async def create_etf(self, qty: int):
         '''
@@ -146,7 +146,7 @@ class Case1Bot(UTCBot):
         ### TODO spread fair price for each asset
         # self._spread: DefaultDict[str, float] = defaultdict(lambda: 0)
         self._fade: DefaultDict[str, float] = defaultdict(lambda: 0)
-        self._slack: DefaultDict[str, float] = defaultdict(lambda: 0)
+        # self._slack: DefaultDict[str, float] = defaultdict(lambda: 0)
         ### TODO order size for market making positions
         self._quantity: DefaultDict[str, int] = defaultdict(lambda: 0)
         
@@ -157,9 +157,8 @@ class Case1Bot(UTCBot):
         """
         STARTING ASYNC FUNCTIONS
         """
-        asyncio.create_task(self.handle_read_params())
-        # asyncio.create_task(self.send_bogus_orders())
         asyncio.create_task(self.print_positions())
+        asyncio.create_task(self.handle_read_params())
         asyncio.create_task(self.arbitrage_etf())
 
         # Starts market making for each asset
@@ -228,12 +227,12 @@ class Case1Bot(UTCBot):
                     asset,
                     pb.OrderSpecType.LIMIT,
                     pb.OrderSpecSide.BID,
-                    SIZE_BASE,
+                    self.size_base,
                     round_nearest(penny_bid_price, TICK_SIZE)
                 )
 
                 if bid_resp.ok:
-                    self.__orders[asset + '_bid'] = (bid_resp.order_id, penny_bid_price, SIZE_BASE)
+                    self.__orders[asset + '_bid'] = (bid_resp.order_id, penny_bid_price, self.size_base)
                     self.__id_to_order[bid_resp.order_id] = asset + '_bid'
 
                 ask_resp = await self.modify_order(
@@ -241,18 +240,18 @@ class Case1Bot(UTCBot):
                     asset,
                     pb.OrderSpecType.LIMIT,
                     pb.OrderSpecSide.ASK,
-                    SIZE_BASE,
+                    self.size_base,
                     round_nearest(penny_ask_price, TICK_SIZE)
                 )
 
                 if ask_resp.ok:
-                    self.__orders[asset + '_ask'] = (ask_resp.order_id, penny_ask_price, SIZE_BASE)
+                    self.__orders[asset + '_ask'] = (ask_resp.order_id, penny_ask_price, self.size_base)
                     self.__id_to_order[ask_resp.order_id] = asset + '_ask'
                 
-                for i in range(0, len(LEVEL_SIZES)):
+                for i in range(0, len(self.level_sizes)):
                     lv = str(i + 1)
 
-                    if (penny_bid_price - LEVEL_SPREADS[i]) > 0:
+                    if (penny_bid_price - self.level_spreads[i]) > 0:
                         old_bid_id, _, __ = self.__orders[asset + 'bid_L' + lv]
                         old_ask_id, _, __ = self.__orders[asset + 'ask_L' + lv]
 
@@ -261,12 +260,12 @@ class Case1Bot(UTCBot):
                             asset,
                             pb.OrderSpecType.LIMIT,
                             pb.OrderSpecSide.BID,
-                            LEVEL_SIZES[i],
-                            round_nearest(penny_bid_price - LEVEL_SPREADS[i], TICK_SIZE)
+                            self.level_sizes[i],
+                            round_nearest(penny_bid_price - self.level_spreads[i], TICK_SIZE)
                         )
 
                         if bid_resp.ok:
-                            self.__orders[asset + '_bid_L' + lv] = (bid_resp.order_id, penny_bid_price - LEVEL_SPREADS[i], LEVEL_SIZES[i])
+                            self.__orders[asset + '_bid_L' + lv] = (bid_resp.order_id, penny_bid_price - self.level_spreads[i], self.level_sizes[i])
                             self.__id_to_order[bid_resp.order_id] = asset + '_bid_L' + lv
 
                         ask_resp = await self.modify_order(
@@ -274,12 +273,12 @@ class Case1Bot(UTCBot):
                             asset,
                             pb.OrderSpecType.LIMIT,
                             pb.OrderSpecSide.ASK,
-                            LEVEL_SIZES[i],
-                            round_nearest(penny_ask_price + LEVEL_SPREADS[i], TICK_SIZE)
+                            self.level_sizes[i],
+                            round_nearest(penny_ask_price + self.level_spreads[i], TICK_SIZE)
                         )
 
                         if ask_resp.ok:
-                            self.__orders[asset + '_ask_L' + lv] = (ask_resp.order_id, penny_ask_price + LEVEL_SPREADS[i], LEVEL_SIZES[i])
+                            self.__orders[asset + '_ask_L' + lv] = (ask_resp.order_id, penny_ask_price + self.level_spreads[i], self.level_sizes[i])
                             self.__id_to_order[ask_resp.order_id] = asset + '_ask_L' + lv
 
 
@@ -414,15 +413,18 @@ class Case1Bot(UTCBot):
                     # self._spread[asset] = params[asset_str]['edge']
                     self._fade[asset] = params[asset_str]['fade']
                     # self._quantity[asset] = params[asset_str]['size']
-                    self._slack[asset] = params[asset_str]['slack']
+                    # self._slack[asset] = params[asset_str]['slack']
+                    self.size_base = params['size_base']
+                    self.level_sizes = params['level_sizes']
+                    self.level_spreads = params['level_spreads']
             except:
                 print("Unable to read file " + PARAM_FILE)
 
-            await asyncio.sleep(5)
+            await asyncio.sleep(2)
     
     async def print_positions(self):
         while True:
-            print("\nDay", self._day)
+            print("\nDay", self._day) 
             print(self.positions)
             await asyncio.sleep(1)
 
