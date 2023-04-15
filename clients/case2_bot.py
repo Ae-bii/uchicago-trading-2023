@@ -234,12 +234,99 @@ class OptionBot(UTCBot):
         
     async def add_trades(self):
         while self.time_tick <= 600:
-            # if self.my_greek_positions["delta"] >= 0.8 * self.greek_limits["delta"]:
-            #     order_quantity = self.my_greek_positions["delta"] - 0.8*self.greek_limits["delta"]
-            #     await self.modify_order("SPY", "SPY", pb.OrderSpecType.MARKET, pb.OrderSpecSide.ASK, min(order_quantity, 15))
-            # elif self.my_greek_positions["delta"] < 0.8 * -self.greek_limits["delta"]:
-            #     order_quantity =  -0.8*self.greek_limits["delta"] - self.my_greek_positions["delta"]
-            #     await self.modify_order("SPY", "SPY", pb.OrderSpecType.MARKET, pb.OrderSpecSide.BID, min(order_quantity, 15))
+            if self.my_greek_positions["delta"] >= 0.8 * self.greek_limits["delta"]:
+                for strike in self.option_strikes:
+                    mid_call = (self._best_bid[f"SPY{strike}C"] + self._best_ask[f"SPY{strike}C"]) / 2
+                    delta_call = self.delta_call(self.underlying_price[-1], strike, self.time_to_expiry, mid_call)
+                    if not math.isnan(delta_call) and delta_call != 0:
+                        delta_put = delta_call - 1
+                        short_call_qty = self.my_greek_positions["delta"] / delta_call
+                        short_put_qty = self.my_greek_positions["delta"] / delta_put
+                        
+                        await self.modify_order(f"SPY{strike}C", f"SPY{strike}C", pb.OrderSpecType.MARKET, pb.OrderSpecSide.ASK, min(int(short_call_qty), 15))
+                        await self.modify_order(f"SPY{strike}P", f"SPY{strike}P", pb.OrderSpecType.MARKET, pb.OrderSpecSide.ASK, min(int(short_put_qty), 15))
+            elif self.my_greek_positions["delta"] < 0.8 * -self.greek_limits["delta"]:
+                for strike in self.option_strikes:
+                    mid_call = (self._best_bid[f"SPY{strike}C"] + self._best_ask[f"SPY{strike}C"]) / 2
+                    delta_call = self.delta_call(self.underlying_price[-1], strike, self.time_to_expiry, mid_call)
+                    if not math.isnan(delta_call) and delta_call != 0:
+                        delta_put = delta_call - 1
+                        long_call_qty = -self.my_greek_positions["delta"] / delta_call
+                        long_put_qty = -self.my_greek_positions["delta"] / delta_put
+                        
+                        await self.modify_order(f"SPY{strike}C", f"SPY{strike}C", pb.OrderSpecType.MARKET, pb.OrderSpecSide.BID, min(int(long_call_qty), 15))
+                        await self.modify_order(f"SPY{strike}P", f"SPY{strike}P", pb.OrderSpecType.MARKET, pb.OrderSpecSide.BID, min(int(long_put_qty), 15))
+                        
+            if self.my_greek_positions["gamma"] >= 0.8 * self.greek_limits["gamma"]:
+                for strike in self.option_strikes:
+                    mid_call = (self._best_bid[f"SPY{strike}C"] + self._best_ask[f"SPY{strike}C"]) / 2
+                    gamma_call = self.gamma_call(self.underlying_price[-1], strike, self.time_to_expiry, mid_call)
+                    if not math.isnan(gamma_call) and gamma_call != 0:
+                        gamma_put = gamma_call
+                        short_call_qty = self.my_greek_positions["gamma"] / gamma_call
+                        short_put_qty = self.my_greek_positions["gamma"] / gamma_put
+                        
+                        await self.modify_order(f"SPY{strike}C", f"SPY{strike}C", pb.OrderSpecType.MARKET, pb.OrderSpecSide.ASK, min(int(short_call_qty), 15))
+                        await self.modify_order(f"SPY{strike}P", f"SPY{strike}P", pb.OrderSpecType.MARKET, pb.OrderSpecSide.ASK, min(int(short_put_qty), 15))
+            elif self.my_greek_positions["gamma"] < 0.8 * -self.greek_limits["gamma"]:
+                for strike in self.option_strikes:
+                    mid_call = (self._best_bid[f"SPY{strike}C"] + self._best_ask[f"SPY{strike}C"]) / 2
+                    gamma_call = self.gamma_call(self.underlying_price[-1], strike, self.time_to_expiry, mid_call)
+                    if not math.isnan(gamma_call) and gamma_call != 0:
+                        gamma_put = gamma_call - 1
+                        long_call_qty = -self.my_greek_positions["gamma"] / gamma_call
+                        long_put_qty = -self.my_greek_positions["gamma"] / gamma_put
+                        
+                        await self.modify_order(f"SPY{strike}C", f"SPY{strike}C", pb.OrderSpecType.MARKET, pb.OrderSpecSide.BID, min(int(long_call_qty), 15))
+                        await self.modify_order(f"SPY{strike}P", f"SPY{strike}P", pb.OrderSpecType.MARKET, pb.OrderSpecSide.BID, min(int(long_put_qty), 15))
+                        
+            if self.my_greek_positions["theta"] >= 0.8 * self.greek_limits["theta"]:
+                for strike in self.option_strikes:
+                    mid_call = (self._best_bid[f"SPY{strike}C"] + self._best_ask[f"SPY{strike}C"]) / 2
+                    mid_put = (self._best_bid[f"SPY{strike}P"] + self._best_ask[f"SPY{strike}P"]) / 2
+                    theta_call = self.theta_call(self.underlying_price[-1], strike, self.time_to_expiry, mid_call)
+                    theta_put = self.theta_put(self.underlying_price[-1], strike, self.time_to_expiry, mid_put)
+                    if not (math.isnan(theta_call) or math.isnan(theta_put)) and theta_call != 0 and theta_put != 0:
+                        short_call_qty = self.my_greek_positions["theta"] / theta_call
+                        short_put_qty = self.my_greek_positions["theta"] / theta_put
+                        
+                        await self.modify_order(f"SPY{strike}C", f"SPY{strike}C", pb.OrderSpecType.MARKET, pb.OrderSpecSide.ASK, min(int(short_call_qty),15))
+                        await self.modify_order(f"SPY{strike}P", f"SPY{strike}P", pb.OrderSpecType.MARKET, pb.OrderSpecSide.ASK, min(int(short_put_qty),15))
+            elif self.my_greek_positions["theta"] < 0.8 * -self.greek_limits["theta"]:
+                for strike in self.option_strikes:
+                    mid_call = (self._best_bid[f"SPY{strike}C"] + self._best_ask[f"SPY{strike}C"]) / 2
+                    mid_put = (self._best_bid[f"SPY{strike}P"] + self._best_ask[f"SPY{strike}P"]) / 2
+                    theta_call = self.theta_call(self.underlying_price[-1], strike, self.time_to_expiry, mid_call)
+                    theta_put = self.theta_put(self.underlying_price[-1], strike, self.time_to_expiry, mid_put)
+                    if not (math.isnan(theta_call) or math.isnan(theta_put)) and theta_call != 0 and theta_put != 0:
+                        long_call_qty = -self.my_greek_positions["theta"] / theta_call
+                        long_put_qty = -self.my_greek_positions["theta"] / theta_put
+                        
+                        await self.modify_order(f"SPY{strike}C", f"SPY{strike}C", pb.OrderSpecType.MARKET, pb.OrderSpecSide.BID, min(int(long_call_qty),15))
+                        await self.modify_order(f"SPY{strike}P", f"SPY{strike}P", pb.OrderSpecType.MARKET, pb.OrderSpecSide.BID, min(int(long_put_qty),15))
+                        
+            if self.my_greek_positions["vega"] >= 0.8 * self.greek_limits["vega"]:
+                for strike in self.option_strikes:
+                    mid_call = (self._best_bid[f"SPY{strike}C"] + self._best_ask[f"SPY{strike}C"]) / 2
+                    vega_call = self.vega_call(self.underlying_price[-1], strike, self.time_to_expiry, mid_call)
+                    if not math.isnan(vega_call) and vega_call != 0:
+                        vega_put = vega_call
+                        short_call_qty = self.my_greek_positions["vega"] / vega_call
+                        short_put_qty = self.my_greek_positions["vega"] / vega_put
+                        
+                        await self.modify_order(f"SPY{strike}C", f"SPY{strike}C", pb.OrderSpecType.MARKET, pb.OrderSpecSide.ASK, min(int(short_call_qty),15))
+                        await self.modify_order(f"SPY{strike}P", f"SPY{strike}P", pb.OrderSpecType.MARKET, pb.OrderSpecSide.ASK, min(int(short_put_qty),15))
+            elif self.my_greek_positions["vega"] < 0.8 * -self.greek_limits["vega"]:
+                for strike in self.option_strikes:
+                    mid_call = (self._best_bid[f"SPY{strike}C"] + self._best_ask[f"SPY{strike}C"]) / 2
+                    vega_call = self.vega_call(self.underlying_price[-1], strike, self.time_to_expiry, mid_call)
+                    if not math.isnan(vega_call) and vega_call != 0:
+                        vega_put = vega_call - 1
+                        long_call_qty = -self.my_greek_positions["vega"] / vega_call
+                        long_put_qty = -self.my_greek_positions["vega"] / vega_put
+                        
+                        await self.modify_order(f"SPY{strike}C", f"SPY{strike}C", pb.OrderSpecType.MARKET, pb.OrderSpecSide.BID, min(int(long_call_qty),15))
+                        await self.modify_order(f"SPY{strike}P", f"SPY{strike}P", pb.OrderSpecType.MARKET, pb.OrderSpecSide.BID, min(int(long_put_qty),15))
                 
             
             for strike in self.option_strikes:
@@ -262,28 +349,24 @@ class OptionBot(UTCBot):
                         #     best_ask = self._second_best_ask[f"SPY{strike}{flag}"]
                         
                         penny_bid_price = best_bid + 0.01
-                        penny_ask_price = best_ask - 0.01 - self._fade[asset] * self.positions.get(asset, 0) / 100
+                        penny_ask_price = best_ask - 0.01
                         
                         if self.my_greek_positions["theta"] >= 0.8 * self.greek_limits["theta"]:
-                            penny_bid_price += self._fade[asset] * self.positions.get(asset, 0) / 100
-                            penny_ask_price += self._fade[asset] * self.positions.get(asset, 0) / 100
+                            penny_bid_price += self._fade[asset] * self.positions.get(asset, 0)
+                            penny_ask_price += self._fade[asset] * self.positions.get(asset, 0)
                         elif self.my_greek_positions["theta"] < 0.8 * -self.greek_limits["theta"]:
-                            penny_bid_price -= self._fade[asset] * self.positions.get(asset, 0) / 100
-                            penny_ask_price -= self._fade[asset] * self.positions.get(asset, 0) / 100
-                        
-                        # print(f"Theoretical {asset}: {theo}")
-                        # print(f"Penny Bid {asset}: {penny_bid_price}")
-                        # print(f"Penny Ask {asset}: {penny_ask_price}")
+                            penny_bid_price -= self._fade[asset] * self.positions.get(asset, 0)
+                            penny_ask_price -= self._fade[asset] * self.positions.get(asset, 0)
                         
                         old_bid_id, _ = self.__orders[asset + '_bid']
                         old_ask_id, _ = self.__orders[asset + '_ask']
-                        if penny_ask_price >= theo:
+                        if penny_ask_price > theo:
                             ask_resp = await self.modify_order(f"PENNY_ASK{asset}", asset, pb.OrderSpecType.LIMIT, pb.OrderSpecSide.ASK, 15, round_nearest(penny_ask_price, TICK_SIZE))
                             
                             if ask_resp.ok:
-                                self.__orders[asset + '_ask'] = (str(penny_bid_price), ask_resp.order_id)
+                                self.__orders[asset + '_ask'] = (str(penny_ask_price), ask_resp.order_id)
                         
-                        if penny_bid_price <= theo:
+                        if penny_bid_price < theo:
                             bid_resp = await self.modify_order(f"PENNY_BID{asset}", asset, pb.OrderSpecType.LIMIT, pb.OrderSpecSide.BID, 15, round_nearest(penny_bid_price, TICK_SIZE))
                             
                             if bid_resp.ok:
@@ -293,70 +376,7 @@ class OptionBot(UTCBot):
                 
 
     
-    # async def update_options_quotes(self):
-    #     time_to_expiry = 1/4 - ((1/4 - 1/12) * (self.time_tick/600))
-    #     vol = self.compute_vol_estimate()
-    #     thresh_val = .25/2000
-    #     for strike in self.option_strikes:
-    #         for flag in ["C", "P"]:
-    #             asset_name = f"SPY{strike}{flag}"
-    #             theo = self.compute_options_price(
-    #                 flag, self.underlying_price, strike, time_to_expiry, vol
-    #             )
-    #             # calculate price threshold used in bid and ask orders
-    #             callbid_putask_threshold = round((thresh_val)*(self.pos_delta)+.25,1)
-    #             callask_putbid_threshold = round(-(thresh_val)*(self.pos_delta)+.25,1)
-    #             # calculate order quantity based on position held currently
-    #             position = self.positions[f"SPY{strike}{flag}"]
-    #             if (position<0):
-    #                 if (position>-73):
-    #                     buy_quantity = 1
-    #                 else:
-    #                     buy_quantity = round((position**2)/4000)
-    #                 sell_quantity = 1
-    #             elif(position>=0):
-    #                 if (position<73):
-    #                     sell_quantity = 1
-    #                 else:
-    #                     sell_quantity = round((position**2)/4000)
-    #                 buy_quantity = 1
-    #             # continuously place bid and ask orders
-    #             if(flag=="C"):
-    #                 bid_response = await self.place_order(
-    #                     asset_name,
-    #                     pb.OrderSpecType.LIMIT,
-    #                     pb.OrderSpecSide.BID,
-    #                     buy_quantity,
-    #                     theo - callbid_putask_threshold,
-    #                 )
-    #                 assert bid_response.ok
-    #                 ask_response = await self.place_order(
-    #                     asset_name,
-    #                     pb.OrderSpecType.LIMIT,
-    #                     pb.OrderSpecSide.ASK,
-    #                     sell_quantity,
-    #                     theo + callask_putbid_threshold,
-    #                 )
-    #                 assert ask_response.ok
-    #             elif(flag=="P"):
-    #                 bid_response = await self.place_order(
-    #                     asset_name,
-    #                     pb.OrderSpecType.LIMIT,
-    #                     pb.OrderSpecSide.BID,
-    #                     buy_quantity,
-    #                     theo - callask_putbid_threshold,
-    #                 )
-    #                 assert bid_response.ok
-    #                 ask_response = await self.place_order(
-    #                     asset_name,
-    #                     pb.OrderSpecType.LIMIT,
-    #                     pb.OrderSpecSide.ASK,
-    #                     sell_quantity,
-    #                     theo + callbid_putask_threshold,
-    #                 )
-    #                 assert ask_response.ok
-    #     # reset position delta to 0
-    #     self.pos_delta=0
+
 
     async def handle_exchange_update(self, update: pb.FeedMessage):
         self.my_greek_positions = {
@@ -380,6 +400,9 @@ class OptionBot(UTCBot):
                 self.positions[fill_msg.asset] += update.fill_msg.filled_qty
             else:
                 self.positions[fill_msg.asset] -= update.fill_msg.filled_qty
+            # print(update.fill_msg.order_id, "filled:", "BUY" if update.fill_msg.order_side == pb.FillMessageSide.BUY else "SELL", 
+            #       update.fill_msg.asset, "@", update.fill_msg.price, "x", update.fill_msg.filled_qty)
+            # print(self.positions)
                 
         elif kind == "market_snapshot_msg":
             self.books["SPY"] = update.market_snapshot_msg.books["SPY"]
